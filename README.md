@@ -6,7 +6,7 @@ short-lived credential scoped to the permitted Admin operation.
 
 ![A read request moves from desktop sign-in to the MCP server, which checks Cedar, obtains a SPIRE identity, exchanges the grant at Keycloak, and calls Admin REST through a private gateway.](docs/assets/mcp-auth-flow.gif)
 
-[Interactive study guide](docs/mcp-auth-evolution.html) · Download or clone the repo and open the HTML file in your browser to step through a read, an approved write, and a missing-scope denial.
+[Interactive guide](https://github.com/gaelnite/keycloak-mcp-security-demo/blob/main/docs/mcp-auth-evolution.html) · Open the HTML locally to step through an allowed read, an approved write, and a missing-scope denial.
 
 The Docker demo uses Keycloak 26.8.2 with its **preview SPIFFE feature**. It
 pre-registers the desktop client. Dynamic Client ID Metadata Document (CIMD)
