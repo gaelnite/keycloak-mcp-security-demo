@@ -1,0 +1,40 @@
+# Contributing
+
+This project maintains an experimental MCP security reference. Start with the
+[showcase](README.md) and its [security model](docs/SECURITY.md). Report a
+suspected vulnerability through the [security policy](SECURITY.md).
+
+Open an issue for a change larger than a typo or a single-file fix. Submit a
+focused pull request on a `feat/`, `fix/`, `docs/`, `chore/`, `refactor/` or
+`test/` branch. The maintainer reviews merges to `main`.
+
+## Run the local checks
+
+Use Python 3.11 or later and Node.js 22 from the repository root.
+
+```sh
+python3 -m venv .venv
+.venv/bin/python -m pip install -r mcp/requirements.txt
+npm ci --prefix mcp
+.venv/bin/python -m unittest discover -s tests -t . -v
+echo '{"op":"validate"}' | node mcp/pdp.mjs
+.venv/bin/python mcp/gen_cedar.py --check
+```
+
+The suite uses the real Cedar engine. Live-only legacy tests skip when their
+local Keycloak installation or credentials are unavailable. Hosted CI also
+validates Terraform and checks Ansible syntax. Docker CI builds the headless,
+interactive and delegated profiles when relevant runtime inputs change.
+[CI workflows](.github/workflows) · [Docker demo](docs/DOCKER.md)
+
+## What to include in a change
+
+- Describe the profile, version, checks run and any skips. For a security
+  change, show both the permitted operation and the corresponding denial.
+- Cite the protocol revision and section for changes to protocol behavior.
+  Keep the verified human subject, desktop client and attested workload distinct.
+- Keep Markdown files at or below 150 lines. Use synthetic identities in examples.
+  Keep credentials, approval tokens, Terraform state, private host information
+  and raw session transcripts out of commits, issues and CI logs.
+
+Contributions are licensed under [Apache 2.0](LICENSE).

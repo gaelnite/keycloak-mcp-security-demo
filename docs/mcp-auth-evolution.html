@@ -1,0 +1,639 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Inside a Keycloak MCP tool call · security study guide</title>
+<style>
+  :root{
+    --bg:#070b14; --panel:#0d1526; --panel2:#101a30; --line:rgba(148,163,184,.16);
+    --text:#e6edf7; --muted:#93a1b8; --faint:#64748b;
+    --sky:#38bdf8; --warn:#fbbf24; --attack:#f87171; --defence:#34d399; --ident:#a78bfa;
+    --mono:ui-monospace,'SF Mono',SFMono-Regular,Menlo,Consolas,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,'Segoe UI',Inter,Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{background:var(--bg);color:var(--text);font-family:var(--sans);line-height:1.55;overflow-x:hidden}
+  body::before{content:'';position:fixed;inset:0;z-index:-2;
+    background:radial-gradient(900px 500px at 12% -5%,rgba(56,189,248,.10),transparent 60%),
+               radial-gradient(800px 500px at 88% 12%,rgba(167,139,250,.09),transparent 60%),
+               radial-gradient(900px 600px at 50% 110%,rgba(52,211,153,.07),transparent 60%)}
+  body::after{content:'';position:fixed;inset:0;z-index:-1;opacity:.5;
+    background:repeating-linear-gradient(0deg,transparent 0 39px,rgba(148,163,184,.045) 39px 40px),
+               repeating-linear-gradient(90deg,transparent 0 39px,rgba(148,163,184,.045) 39px 40px)}
+  .wrap{max-width:1180px;margin:0 auto;padding:0 24px}
+  a{color:var(--sky);text-decoration:none}
+  a:hover{text-decoration:underline}
+
+  /* ---------- nav ---------- */
+  nav{position:sticky;top:0;z-index:50;background:rgba(7,11,20,.82);backdrop-filter:blur(12px);border-bottom:1px solid var(--line)}
+  nav .wrap{display:flex;align-items:center;gap:22px;height:58px}
+  .brand{font-family:var(--mono);font-size:13px;color:var(--text);letter-spacing:.4px;white-space:nowrap}
+  .brand b{color:var(--defence)}
+  .navlinks{display:flex;gap:4px;margin-left:auto;overflow-x:auto}
+  .navlinks a{color:var(--muted);font-size:13px;padding:6px 12px;border-radius:8px;white-space:nowrap}
+  .navlinks a:hover{color:var(--text);text-decoration:none;background:rgba(148,163,184,.08)}
+  .navlinks a.active{color:var(--text);background:rgba(56,189,248,.14)}
+
+  /* ---------- hero ---------- */
+  header{padding:92px 0 56px;text-align:center}
+  .kicker{font-family:var(--mono);font-size:12.5px;color:var(--sky);letter-spacing:2.5px;text-transform:uppercase}
+  h1{font-size:clamp(2.3rem,5.2vw,3.9rem);line-height:1.08;font-weight:800;letter-spacing:-.02em;margin:18px 0 20px}
+  h1 .grad{background:linear-gradient(92deg,var(--sky) 0%,var(--ident) 45%,var(--defence) 100%);-webkit-background-clip:text;background-clip:text;color:transparent}
+  .lead{max-width:760px;margin:0 auto;color:var(--muted);font-size:17px}
+  .chips{display:flex;flex-wrap:wrap;gap:10px;justify-content:center;margin-top:30px}
+  .chip{font-family:var(--mono);font-size:12px;color:var(--text);background:var(--panel);border:1px solid var(--line);border-radius:999px;padding:7px 14px}
+  .chip b{color:var(--defence);font-weight:600}
+  .scrollcue{margin-top:44px;color:var(--faint);font-size:12px;font-family:var(--mono);animation:cue 2.4s ease-in-out infinite}
+  @keyframes cue{0%,100%{transform:translateY(0);opacity:.55}50%{transform:translateY(6px);opacity:1}}
+
+  /* ---------- sections ---------- */
+  section{padding:64px 0 30px}
+  .sechead{display:flex;gap:18px;align-items:baseline;margin-bottom:8px}
+  .secnum{font-family:var(--mono);font-size:13px;color:var(--faint);border:1px solid var(--line);border-radius:8px;padding:4px 9px}
+  h2{font-size:clamp(1.5rem,3vw,2.1rem);font-weight:750;letter-spacing:-.01em}
+  .lede{color:var(--muted);max-width:860px;margin:6px 0 26px;font-size:15.5px}
+  .lede code, p code, li code{font-family:var(--mono);font-size:.88em;background:rgba(148,163,184,.12);padding:1.5px 6px;border-radius:6px;color:var(--text)}
+
+  /* ---------- flow stage ---------- */
+  .flowgrid{display:grid;grid-template-columns:1.62fr 1fr;gap:18px;align-items:start}
+  @media(max-width:1020px){.flowgrid{grid-template-columns:1fr}}
+  .stage{background:linear-gradient(180deg,var(--panel),var(--panel2));border:1px solid var(--line);border-radius:18px;padding:16px 16px 10px;box-shadow:0 18px 50px rgba(0,0,0,.35)}
+  .pills{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px}
+  .pill{font-family:var(--mono);font-size:12px;color:var(--muted);background:rgba(148,163,184,.07);border:1px solid var(--line);border-radius:999px;padding:6px 13px;cursor:pointer;transition:all .18s}
+  .pill:hover{color:var(--text);border-color:rgba(148,163,184,.4)}
+  .pill.on{color:#06121f;background:var(--sky);border-color:var(--sky);font-weight:600}
+  .pill.on.atk{background:var(--attack);border-color:var(--attack)}
+  .pill.on.def{background:var(--defence);border-color:var(--defence)}
+  svg.diagram{width:100%;height:auto;display:block}
+  .controls{display:flex;align-items:center;gap:8px;padding:10px 2px 6px;flex-wrap:wrap}
+  .btn{font-family:var(--mono);font-size:12.5px;color:var(--text);background:rgba(148,163,184,.09);border:1px solid var(--line);border-radius:9px;padding:7px 13px;cursor:pointer;transition:all .15s}
+  .btn:hover{border-color:rgba(148,163,184,.45);background:rgba(148,163,184,.16)}
+  .btn.primary{background:var(--sky);border-color:var(--sky);color:#06121f;font-weight:700;min-width:86px}
+  .btn.primary:hover{filter:brightness(1.12)}
+  select.btn{appearance:none;padding-right:24px;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%2393a1b8' fill='none' stroke-width='1.5'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 9px center}
+  .progress{flex:1;min-width:90px;height:4px;background:rgba(148,163,184,.14);border-radius:99px;overflow:hidden}
+  .progress i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--sky),var(--defence));border-radius:99px;transition:width .3s}
+  .stepcount{font-family:var(--mono);font-size:11.5px;color:var(--faint);white-space:nowrap}
+
+  .side{display:flex;flex-direction:column;gap:14px}
+  .caption{background:linear-gradient(180deg,var(--panel),var(--panel2));border:1px solid var(--line);border-radius:18px;padding:18px;min-height:196px}
+  .badge{display:inline-block;font-family:var(--mono);font-size:10.5px;font-weight:700;letter-spacing:1.6px;padding:4px 10px;border-radius:6px;margin-bottom:10px}
+  .badge.flow{color:var(--sky);background:rgba(56,189,248,.13)}
+  .badge.warn{color:var(--warn);background:rgba(251,191,36,.13)}
+  .badge.attack{color:var(--attack);background:rgba(248,113,113,.14)}
+  .badge.defence{color:var(--defence);background:rgba(52,211,153,.13)}
+  .badge.ident{color:var(--ident);background:rgba(167,139,250,.14)}
+  .caption h3{font-size:16.5px;font-weight:700;margin-bottom:7px;letter-spacing:-.01em}
+  .caption p{font-size:13.5px;color:var(--muted)}
+  .caption .note{margin-top:11px;padding:9px 12px;border-left:3px solid var(--sky);background:rgba(56,189,248,.06);border-radius:0 9px 9px 0;font-family:var(--mono);font-size:11.5px;color:var(--text);line-height:1.5}
+  .steps{background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:10px;max-height:300px;overflow-y:auto}
+  .steps::-webkit-scrollbar{width:8px}.steps::-webkit-scrollbar-thumb{background:rgba(148,163,184,.25);border-radius:99px}
+  .steprow{display:flex;gap:10px;align-items:center;width:100%;text-align:left;background:none;border:0;color:var(--muted);font-family:var(--sans);font-size:12.5px;padding:7px 9px;border-radius:9px;cursor:pointer;transition:background .15s}
+  .steprow:hover{background:rgba(148,163,184,.08);color:var(--text)}
+  .steprow.on{background:rgba(56,189,248,.12);color:var(--text)}
+  .steprow .n{font-family:var(--mono);font-size:10.5px;color:var(--faint);min-width:20px}
+  .steprow .dot{width:7px;height:7px;border-radius:99px;flex:none}
+
+  /* ---------- svg internals ---------- */
+  .edge{fill:none;stroke:#3a4a63;stroke-width:1.6;transition:opacity .3s,stroke .2s}
+  .edge.dim{opacity:.16}
+  .edge.hot{stroke-width:2.6;filter:drop-shadow(0 0 5px currentColor)}
+  .node{transition:opacity .3s}
+  .node.dim{opacity:.22}
+  .node .box{fill:rgba(148,163,184,.06);stroke:rgba(148,163,184,.35);stroke-width:1.2;transition:all .2s}
+  .node.hot .box{stroke-width:2.2;filter:drop-shadow(0 0 9px currentColor)}
+  .node text{fill:var(--text);font-family:var(--sans)}
+  .node .t{font-size:13px;font-weight:650}
+  .node .s{font-size:10px;fill:var(--muted);font-family:var(--mono)}
+  .node .ic{fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+  .packet{pointer-events:none}
+
+  table{width:100%;border-collapse:collapse;margin-top:26px;font-size:13.5px;background:var(--panel);border-radius:16px;overflow:hidden;border:1px solid var(--line)}
+  th,td{padding:12px 16px;text-align:left;border-bottom:1px solid var(--line);vertical-align:top}
+  th{font-family:var(--mono);font-size:11.5px;letter-spacing:1px;text-transform:uppercase;color:var(--muted);background:rgba(148,163,184,.06)}
+  th:nth-child(2){color:var(--attack)} th:nth-child(3){color:var(--defence)}
+  td:first-child{font-weight:650;white-space:nowrap;font-size:13px}
+  td:nth-child(2){color:var(--muted)} td:nth-child(3){color:var(--text)}
+  tr:last-child td{border-bottom:0}
+  .tablescroll{overflow-x:auto;border-radius:16px}
+
+  /* ---------- sources / footer ---------- */
+  .sources{columns:2;gap:40px;font-size:13.5px;color:var(--muted)}
+  @media(max-width:800px){.sources{columns:1}}
+  .sources li{margin-bottom:11px;break-inside:avoid}
+  .sources .rev{font-family:var(--mono);font-size:11px;color:var(--faint)}
+  footer{border-top:1px solid var(--line);margin-top:70px;padding:26px 0 40px;color:var(--faint);font-family:var(--mono);font-size:11.5px;display:flex;justify-content:space-between;gap:14px;flex-wrap:wrap}
+
+
+  header.wrap{padding-top:clamp(42px,6vw,80px);padding-bottom:46px}
+  section.wrap{padding-top:34px;padding-bottom:38px;scroll-margin-top:62px;border-top:1px solid var(--line)}
+  footer.wrap{padding-top:25px;padding-bottom:32px}
+  .route{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:20px 0}
+  header .route{justify-content:center;margin-bottom:0}
+  .route span{padding:5px 11px;border:1px solid var(--line);border-radius:5px;background:var(--panel);font:12px/1.6 var(--mono)}
+  .route i{font-style:normal;color:var(--sky)}
+  section h3{font-size:1.23rem;margin:24px 0 10px}
+  .caption h3,.exercise h3{margin:0 0 8px}
+  .prose,.split p,.rail li,.exercise{font-size:15px;line-height:1.65;color:#beccdd}
+  .prose{max-width:88ch;margin:14px 0}
+  .refs{font-size:13px;color:var(--muted);margin:16px 0 6px}
+  .refs a,.sources a{text-decoration:underline;text-underline-offset:3px;text-decoration-color:#42708c}
+  .split,.rail{display:grid;gap:12px;margin:14px 0}
+  .split{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .rail{grid-template-columns:repeat(4,minmax(0,1fr));counter-reset:attest;list-style:none}
+  .split article,.rail li,.exercise,pre{border-radius:12px;border:1px solid var(--line);background:var(--panel);padding:18px}
+  .rail li{counter-increment:attest;font-size:14px;border-top:2px solid var(--ident)}
+  .rail li::before{content:counter(attest,decimal-leading-zero);font:13px var(--mono);color:var(--ident)}
+  .rail strong{display:block;margin:8px 0;color:var(--text)}
+  .split h3,.split h4{font-size:1.05rem;margin-top:0;margin-bottom:5px;color:var(--defence)}
+  .exercise{margin-top:12px;max-width:84ch}
+  .exercise button{margin:8px 0}
+  #answer{padding:12px 0 0;border-top:1px solid var(--line);margin-top:8px}
+  pre{overflow:auto;margin:14px 0;border-left:3px solid var(--defence);color:#cce9df;font:13px/1.6 var(--mono)}
+  .flowgrid{grid-template-columns:minmax(0,1fr)}
+  .side{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));align-items:start}
+  .steps{position:relative;max-height:196px}.caption{min-height:196px}
+  .diagram-scroll{overflow-x:auto}.diagram-scroll svg{min-width:695px}
+  .flowgrid>*,.side>*{min-width:0}
+  .tabledesc,caption,figcaption{color:var(--muted);text-align:left;font-size:13px}
+  figcaption{padding:8px 0}.stage figure{margin:0}
+  table{margin-top:10px}caption{padding:0 0 8px}th:nth-child(n){color:var(--sky)}
+  td:first-child{white-space:normal}
+  .sources{padding-left:20px}.sources li::marker{color:var(--sky)}
+  :focus-visible{outline:2px solid var(--sky);outline-offset:3px}
+  details{margin:15px 0;color:var(--muted)}summary{color:var(--sky);cursor:pointer}
+  .transcript h4{margin:12px 0 4px;color:var(--text)}
+  .transcript ol{padding-left:24px;max-width:85ch}
+  .transcript li{margin:8px 0}.transcript li strong{display:block;color:var(--text)}
+  @media(max-width:760px){.side,.split{grid-template-columns:1fr}.rail{grid-template-columns:repeat(2,minmax(0,1fr))}
+    nav .brand{display:none}nav .wrap{height:47px}.navlinks{margin:0}.wrap{padding-inline:16px}
+    section.wrap{scroll-margin-top:50px}.sources{columns:1}.tablescroll table{min-width:610px}}
+  @media(max-width:450px){.rail{grid-template-columns:1fr}}
+  @media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}*,*::after,*::before{transition:none!important}}
+  @media print{body{background:white;color:#142136;overflow:visible}body::before,body::after,nav,.controls,.steps,.pills,.side,.exercise button{display:none}
+    *{color:#142136!important;background:transparent!important;box-shadow:none!important}.grad{-webkit-text-fill-color:#142136}
+    .wrap{max-width:none}.diagram-scroll svg{min-width:0}.tablescroll,.diagram-scroll{overflow:visible}
+    .rail,.split{display:block}.rail li,.split article,pre,tr{break-inside:avoid}.sources{columns:1}
+    .stage{break-inside:avoid}section.wrap{padding-block:12px}.transcript{display:block}.node text{fill:#142136}.node.dim{opacity:1}}
+</style>
+</head>
+<body>
+<nav aria-label="Study guide"><div class="wrap"><a class="brand" href="#top">mcp-auth <b>//</b> field guide</a><div class="navlinks">
+<a href="#endstate">Trace a call</a><a href="#credentials">Credentials</a><a href="#policy">Cedar</a><a href="#attacks">Decision lab</a><a href="#today">Profiles</a><a href="#sources">Sources</a></div></div></nav>
+<header id="top" class="wrap"><div class="kicker">Keycloak 26.8.2 · SPIRE 1.16.0 · delegated Docker profile</div>
+<h1>Inside a Keycloak<br><span class="grad">MCP tool call</span></h1>
+<p class="lead">A helpdesk user asks Codex to list users. Follow the request from desktop sign-in to Admin REST. At each hop, ask who is acting, which credential the receiver trusts, and what limits the operation.</p>
+<div class="route"><span>Human grant</span><i>→</i><span>Cedar decision</span><i>→</i><span>Workload proof</span><i>→</i><span>Admin token</span></div></header>
+<main><noscript><style>.flowgrid,#attacks label,#case,.exercise{display:none}</style><p class="wrap">Open “Read every step as text” for the complete walkthrough.</p></noscript>
+<section class="wrap" id="endstate"><h2>Follow the request</h2><p class="lede">Choose a trace and step through the highlighted hops. Sign-in establishes a session. Each permitted Admin call triggers a fresh workload assertion and a separate exchange.</p>
+<div class="flowgrid">
+    <div class="stage">
+      <div class="pills" id="end-pills"></div>
+      <figure><div class="diagram-scroll" tabindex="0" aria-label="Scrollable request diagram"><svg id="end-svg" class="diagram" viewBox="0 0 974 280" role="img" aria-label="Desktop calls MCP. MCP consults Cedar, obtains a SPIRE assertion and exchanges the user token at Keycloak before dispatch through the private gateway to Admin REST."></svg></div><figcaption>The upper row carries the tool request. The lower row supplies tokens, workload identity and policy decisions.</figcaption></figure>
+      <div class="controls">
+        <button class="btn primary" id="end-play">▶ Play</button>
+        <button class="btn" id="end-prev" aria-label="Previous step">‹</button>
+        <button class="btn" id="end-next" aria-label="Next step">›</button>
+        <button class="btn" id="end-restart" aria-label="Restart trace">⟲</button>
+        <select class="btn" id="end-speed" aria-label="Playback speed">
+          <option value="0.6">0.6×</option><option value="1" selected>1×</option><option value="1.8">1.8×</option>
+        </select>
+        <div class="progress"><i id="end-bar"></i></div>
+        <span class="stepcount" id="end-count"></span>
+      </div>
+    </div>
+    <div class="side">
+      <div class="caption" id="end-caption" aria-live="polite"></div>
+      <div class="steps" id="end-steps"></div>
+    </div>
+  </div>
+<details class="transcript"><summary>Read every step as text</summary><h4>Read users</h4><ol data-trace="read" data-tone="flow">
+<li data-e="call" data-from="desktop" data-to="mcp" data-k="flow"><strong>Discover the protected resource</strong> <span>A request without a bearer receives HTTP 401. The WWW-Authenticate challenge points to protected-resource metadata, which identifies the MCP resource and its authorization server.</span></li>
+<li data-e="login" data-from="desktop" data-to="issuer" data-k="ident"><strong>Select the helpdesk grant</strong> <span>The chooser signs in and reads verified entitlements. Helpdesk can select keycloak.users.read. The subsequent desktop authorization request includes that scope, the MCP resource and an S256 PKCE challenge.</span></li>
+<li data-e="login" data-from="issuer" data-to="desktop" data-rev="true" data-k="ident"><strong>Redeem the authorization code</strong> <span>The demo checks callback state and issuer at the registered loopback redirect. At the token endpoint, the verifier must hash to the challenge from the authorization request. The resulting access token identifies the human user and the desktop client.</span></li>
+<li data-e="call" data-from="desktop" data-to="mcp" data-k="flow"><strong>Invoke list_users in lab</strong> <span>MCP verifies the desktop bearer. Discovery reflects the selected tools. The call handler independently checks the target realm, mapped entitlement and actual issued scope before consulting Cedar.</span></li>
+<li data-e="decision" data-from="mcp" data-to="cedar" data-k="defence"><strong>Authorize this principal and tool</strong> <span>MCP maps the verified issuer and subject to a user principal. Cedar evaluates Read on the registered list_users tool in the requested realm. Only a clean permit lets the handler continue.</span></li>
+<li data-e="identity" data-from="mcp" data-to="spire" data-k="ident"><strong>Obtain the user-read workload proof</strong> <span>The registered helper requests a JWT-SVID for the user-read requester. SPIRE attests the local caller. The assertion names the workload as subject and Keycloak’s realm issuer as audience.</span></li>
+<li data-e="exchange" data-from="mcp" data-to="issuer" data-k="ident"><strong>Exchange the two credentials</strong> <span>MCP presents the desktop bearer as subject_token and the JWT-SVID as client_assertion. It requests the realm Admin audience and user-read scope. Keycloak authenticates the requester and issues a separate bearer for the same human.</span></li>
+<li data-e="dispatch" data-from="mcp" data-to="gateway" data-k="defence"><strong>Check the exchanged token and route</strong> <span>MCP verifies the signature, subject continuity, requester, scope set, audience, lifetime and role ceiling. The private gateway calls its authorization check with the original method and URI before it forwards the request.</span></li>
+<li data-e="adminRoute" data-from="gateway" data-to="admin" data-k="flow"><strong>Read and project the response</strong> <span>Keycloak checks the delegated Admin role. MCP returns up to 50 users with ID, username and enabled state. Only the locale fixture can also expose its locale. The desktop receives the projected result.</span></li>
+</ol>
+<h4>Approve a write</h4><ol data-trace="write" data-tone="defence">
+<li data-e="call" data-from="desktop" data-to="mcp" data-k="flow"><strong>Request the fixture locale change</strong> <span>A realm administrator selects keycloak.users.locale.write and calls set_user_locale for the fixed disabled user. With valid arguments and no approval, MCP returns an approval request.</span></li>
+<li data-node="mcp" data-k="defence"><strong>Verify the operator’s approval</strong> <span>Outside the request path, an operator reviews the request and uses an isolated signer. On the second tool call MCP verifies the signature, audience, subject, realm, action, tool, fixture, locale and expiry.</span></li>
+<li data-node="mcp" data-k="defence"><strong>Spend the single attempt</strong> <span>MCP atomically inserts the approval ID in persistent SQLite storage. A duplicate ID fails here, including after a restart. A later policy, exchange or Admin failure still spends this attempt.</span></li>
+<li data-e="decision" data-from="mcp" data-to="cedar" data-k="defence"><strong>Evaluate the write policy</strong> <span>The write policy sees verified approval facts in context, along with the user, tool and realm. The grant alone cannot authorize the write.</span></li>
+<li data-e="identity" data-from="mcp" data-to="spire" data-k="ident"><strong>Select the locale-write identity</strong> <span>MCP requests the JWT-SVID registered for the locale-write exchange client. The read requester identities are distinct.</span></li>
+<li data-e="exchange" data-from="mcp" data-to="issuer" data-k="ident"><strong>Exchange for locale-write</strong> <span>The subject token must authorize the write requester. The exchange produces a new Admin bearer with the write capability and kc-admin-api scopes.</span></li>
+<li data-e="dispatch" data-from="mcp" data-to="gateway" data-k="defence"><strong>Constrain method, target and body</strong> <span>MCP constructs the update from the approved locale and fixed target. The gateway admits the capability’s PUT route for that fixture. Body construction stays inside the trusted MCP process.</span></li>
+<li data-e="adminRoute" data-from="gateway" data-to="admin" data-k="flow"><strong>Apply and verify separately</strong> <span>Keycloak evaluates its own Admin permissions and applies the update. In the live check a separate read grant verifies the result. Restoring the fixture requires an independently approved write.</span></li>
+</ol>
+<h4>Scope omitted</h4><ol data-trace="deny" data-tone="flow">
+<li data-e="login" data-from="issuer" data-to="desktop" data-rev="true" data-k="ident"><strong>Sign in with no tool scope</strong> <span>A helpdesk user completes login without selecting user-read. The issued token still authenticates the user. The role makes user-read eligible for a future grant.</span></li>
+<li data-e="call" data-from="desktop" data-to="mcp" data-k="flow"><strong>Request the read directly</strong> <span>The session’s tool discovery omits list_users. A direct call still reaches independent request checks, so hiding a tool in the catalog is only a usability feature.</span></li>
+<li data-node="mcp" data-k="warn"><strong>Return insufficient_scope</strong> <span>For this entitled user the scope check fails. The HTTP transport returns 403 with the required scope in its bearer challenge. The path stops before Cedar, SPIRE and token exchange.</span></li>
+</ol>
+</details>
+<p class="refs">Implementation · <a href="../mcp/server.py">request gate</a> · <a href="../mcp/delegation.py">exchange and dispatch</a> · <a href="../deploy/docker/register.py">SPIRE registrations</a></p></section>
+<section class="wrap" id="credentials"><h2>Read the credentials side by side</h2><p class="lede">Three credentials participate in a read. A fourth authorizes one write attempt. Read <code>sub</code> as “who this assertion describes,” <code>aud</code> as “who may consume it,” and <code>azp</code> on a Keycloak access token as the client to which it was issued.</p>
+<div class="tablescroll"><table><caption>Credential ledger for the delegated profile</caption><thead><tr><th>Credential</th><th>Issued by → checked by</th><th>Binding in this demo</th><th>Lifetime</th></tr></thead><tbody>
+<tr><td>Desktop access token</td><td>Keycloak → MCP, then Keycloak during exchange</td><td>Human subject, Codex client ID, MCP resource audience plus requester audiences for granted capabilities. Issued scope and mapped entitlement both matter.</td><td>120 s realm setting</td></tr>
+<tr><td>JWT-SVID</td><td>SPIRE → Keycloak</td><td>Capability-specific SPIFFE subject. Its sole audience is the realm issuer. The realm SPIFFE provider trusts a configured bundle and the registered client pins the subject.</td><td>40 s</td></tr>
+<tr><td>Exchanged access token</td><td>Keycloak → MCP verifier and private gateway check</td><td>Same human subject. Exactly the realm Admin audience, capability-specific requester as <code>azp</code>, and exactly the capability scope plus <code>kc-admin-api</code>.</td><td>45 s configured, 60 s verifier ceiling</td></tr>
+<tr><td>Write approval</td><td>Operator signer → MCP</td><td>Ed25519 signature binds the user principal, MCP audience, realm, tool, action, fixture UUID and locale. SQLite consumes its unique <code>jti</code>.</td><td>90 s, one attempt</td></tr></tbody></table></div>
+<p class="refs">Token semantics · <a href="https://datatracker.ietf.org/doc/html/rfc7519#section-4.1">JWT registered claims</a> · <a href="https://github.com/spiffe/spiffe/blob/main/standards/JWT-SVID.md">JWT-SVID profile</a> · <a href="../deploy/docker/bootstrap.py">issuer configuration</a></p>
+<h3>What desktop sign-in proves</h3>
+<p class="prose">The protected-resource metadata names the authorization server. The desktop uses Proof Key for Code Exchange (PKCE), which binds a short-lived code to the client instance that started sign-in. The desktop sends its client ID, the MCP resource URI, selected scopes, state and a PKCE challenge through the browser. Keycloak redirects the code to the registered <code>http://127.0.0.1:49446/callback</code>. The demo client checks state to correlate the response and checks the issuer to bind it to the expected server. It redeems the code using the original verifier. With S256, Keycloak compares <code>BASE64URL(SHA256(verifier))</code> with the challenge. A copied code alone cannot complete that exchange.</p>
+<p class="prose">Consent selects a subset of what the user’s roles allow. A signed-in user can therefore have an empty tool catalog. A rotating refresh token can renew the existing desktop grant within the session limits. Adding a tool scope requires fresh authorization. PKCE protects code redemption. Subsequent MCP requests use bearer tokens and depend on TLS and careful token handling.</p>
+<p class="refs"><a href="https://datatracker.ietf.org/doc/html/rfc7636#section-4.6">RFC 7636 §4.6 · verifier check</a> · <a href="https://datatracker.ietf.org/doc/html/rfc9207#section-2.4">RFC 9207 §2.4 · issuer check</a> · <a href="MCP-INTERACTIVE.md">desktop grant and refresh settings</a></p>
+<h3>Which verification keys does MCP trust?</h3>
+<p class="prose">The MCP verifier accepts configured signing algorithms and reads the JWT header’s <code>kid</code> to select a key from the configured issuer’s HTTPS JSON Web Key Set (JWKS). An unverified issuer check can reject a token early. Grant decisions use the signature-verified claims, including issuer, subject, audience and time bounds. An unfamiliar key ID can trigger a rate-limited refresh of the cached key set. The token never selects the key server.</p>
+<p class="prose">For the desktop client, MCP also checks the client allowlist, bearer type, <code>mcp_roles</code> claim and exact audience set implied by the tool scopes. The downstream verifier separately checks the Admin audience and capability requester. The SPIRE trust bundle verifies workload assertions at Keycloak. The operator public key verifies approvals at MCP. These three signing authorities have different jobs.</p>
+<p class="refs"><a href="https://datatracker.ietf.org/doc/html/rfc8725#section-3">RFC 8725 §3 · JWT verification practices</a> · <a href="../mcp/auth.py">JWT and JWKS verifier</a></p>
+<h3>Two inputs to one exchange</h3><div class="split"><article><h4>Whose authority?</h4><p><code>subject_token</code> carries the user’s MCP access token. Its requester audience connects the chosen grant to one registered exchange client. Selecting user-read gives that requester a path to exchange.</p></article><article><h4>Which workload?</h4><p><code>client_assertion</code> carries the JWT-SVID. Keycloak authenticates the confidential requester through <code>federated-jwt</code>. The desktop is a separate public client using its pre-registered CIMD URL.</p></article></div>
+<p class="prose">For <code>list_users</code>, MCP requests <code>scope=keycloak.users.read</code> and the audience ending in <code>/admin/realms/lab</code>. It rejects a refresh token, a copy of the inbound token, a changed subject or an unexpected scope or role. Only the verified exchange bearer goes to Admin REST. An access token’s audience identifies its recipient. The gateway’s network address can differ from that audience.</p>
+<p class="refs"><a href="https://datatracker.ietf.org/doc/html/rfc8693#section-2.1">RFC 8693 §2.1 · exchange parameters</a> · <a href="https://datatracker.ietf.org/doc/html/draft-ietf-oauth-spiffe-client-auth-03#section-3.2">SPIFFE client authentication draft §3.2 · token request</a> · <a href="../mcp/delegation.py">exchange_form and verify_token</a></p>
+<h3>How the workload earns its SPIFFE ID</h3>
+<ol class="rail"><li><strong>Attest the node</strong>A SPIFFE ID is a workload name within a trust domain. A SPIFFE Verifiable Identity Document (SVID) is its signed proof. SPIRE Server trusts the node CA. Its x509pop node attestor requires proof of possession of the provisioned node certificate’s private key.</li><li><strong>Identify the local process</strong>The agent examines the process calling its Unix Workload API socket. The registration combines its Unix UID and the SHA-256 digest of the calling executable. The agent shares the workload’s PID namespace.</li><li><strong>Issue an assertion</strong>The MCP process invokes the registered helper for the requested capability ID and issuer audience. The same MCP workload can request the three capability identities in the <code>mcp.demo</code> trust domain. The current user grant constrains which exchange can proceed.</li><li><strong>Verify at Keycloak</strong>Keycloak obtains signing keys from the configured SPIRE bundle over TLS. It checks the signed assertion and the requester’s configured subject binding. A new assertion can use the same signing key. Renewal and signing-key rollover are separate events.</li></ol>
+<p class="refs"><a href="https://spiffe.io/docs/latest/spire-about/spire-concepts/">SPIRE attestation model</a> · <a href="https://github.com/spiffe/spiffe/blob/main/standards/SPIFFE_Workload_API.md">Workload API</a> · <a href="../deploy/docker/agent.conf">agent configuration</a></p></section>
+<section class="wrap" id="policy"><h2>Read the Cedar decision</h2><p class="lede">The MCP server is the policy enforcement point (PEP). It calls a local Node process running Cedar WASM, the policy decision point (PDP). Here is the request shape for the helpdesk read.</p>
+<div class="split"><article><h3>Principal and action</h3><p>The user principal ID is a hash of the verified issuer and subject. Two people using the same desktop client get separate principals. The action is <code>Read</code>.</p></article><article><h3>Resource and context</h3><p>The Cedar resource is <code>Tool::"list_users"</code>. The target realm is carried by an entity in <code>context.resource</code>. Other context includes installed extensions, tool registration and verified approval facts.</p></article></div>
+<pre aria-label="Shipped list_users policy"><code>@id("kc-read-list-users")
+permit(
+  principal,
+  action == KeycloakMCP::Action::"Read",
+  resource == KeycloakMCP::Tool::"list_users"
+)
+when {
+  context.toolKnown
+  &amp;&amp; resource.tier == "read"
+  &amp;&amp; principal.scopes.contains(resource.requiredScope)
+  &amp;&amp; principal in context.resource.realm
+  &amp;&amp; (resource.extension == "core" || context.extensions.contains(resource.extension))
+  &amp;&amp; (!(principal is KeycloakMCP::User) || principal.roles.contains("mcp-users-read"))
+};</code></pre>
+<p class="prose">Its <code>when</code> clause requires a known read tool, the required scope, membership in the target realm, the extension condition, and <code>mcp-users-read</code> for a user principal. Cedar requires a matching permit and gives any matching forbid precedence. Cedar can skip an erroneous policy and report diagnostics. This PEP explicitly denies a result with evaluation errors, even if another policy permitted the call.</p>
+<p class="prose">The default PDP deadline is 500 ms. A timeout denies the call and retires the worker. A bounded restart budget allows recovery on a later request. Failure to append a configured audit record also denies dispatch. The delegated log records a decision, policy identifiers, principal and bundle hash. A permit in that log records authorization to try the operation. The downstream update can still fail.</p>
+<p class="refs"><a href="https://docs.cedarpolicy.com/auth/authorization.html">Cedar evaluation and diagnostics</a> · <a href="../cedar/policies.cedar">complete policies</a> · <a href="../mcp/pep.py">decision and audit handling</a></p>
+<h3>Follow one permission across the layers</h3>
+<div class="tablescroll"><table><caption>Role entitlement, selected OAuth scope, Cedar tool and downstream role ceiling</caption><thead><tr><th>Entitlement in mcp_roles</th><th>Grant selected by the user</th><th>Delegated tools</th><th>Keycloak Admin role ceiling</th></tr></thead><tbody>
+<tr><td>mcp-users-read</td><td>keycloak.users.read</td><td>list_users, get_user</td><td>view-users</td></tr>
+<tr><td>mcp-clients-read</td><td>keycloak.clients.read</td><td>list_clients, get_client</td><td>view-clients</td></tr>
+<tr><td>mcp-user-locale</td><td>keycloak.users.locale.write</td><td>set_user_locale with verified approval</td><td>manage-users</td></tr></tbody></table></div>
+<p class="refs"><a href="../mcp/tool_registry.py">Capability and tool registrations</a> · <a href="../deploy/docker/private-admin.conf">gateway authorization subrequest</a></p>
+</section>
+<section id="attacks" class="wrap"><h2>Predict the decision</h2><p class="lede">Each case changes a request, a dependency or the deployment profile. Predict where the call stops, then reveal the answer. These examples model the shipped checks locally.</p>
+<label for="case">Case</label> <select id="case" class="btn"></select><article class="exercise"><h3 id="question"></h3><button class="btn primary" id="answerButton" aria-expanded="false" aria-controls="answer">Reveal decision</button><div id="answer" aria-live="polite" hidden></div></article>
+<p class="refs"><a href="../tests/test_mcp_transport.py">HTTP and tool-result contracts</a> · <a href="../tests/test_delegation.py">delegation checks</a> · <a href="../scripts/verify-delegation.py">live profile verifier</a></p>
+<h3>The smallest write</h3><div class="route"><span>Request locale</span><i>→</i><span>Operator signs</span><i>→</i><span>Consume approval</span><i>→</i><span>Cedar &amp; exchange</span><i>→</i><span>Fixture PUT</span></div>
+<p class="prose">A realm administrator may select locale-write alone. MCP asks for approval of the exact disabled fixture and one supported locale (<code>en</code>, <code>de</code> or <code>fr</code>). A separate, network-isolated signer holds the private key. On the second call, MCP verifies the artifact and atomically records its ID before Cedar and dispatch. Restarting MCP preserves that record. If the exchange fails, retrying requires a new approval.</p>
+<p class="prose">The private gateway binds the exchanged capability to the original HTTP method, normalized path and allowed query. MCP constructs the update body from the approved locale and fixture ID. Keycloak applies its own backend permissions. This distinction matters because the underlying <code>manage-users</code> role is broader than a locale update. The implementation trusts MCP, the private gateway and Docker administrators.</p>
+<p class="refs"><a href="../mcp/approval.py">approval validation and replay storage</a> · <a href="../deploy/docker/private-admin.conf">private listener</a> · <a href="delivery/keycloak-26.8.2.md">why capability-specific exchange clients were introduced</a></p></section>
+<section class="wrap" id="today"><h2>How the design evolved</h2><div class="tablescroll"><table><caption>Choose the evidence that matches the deployment</caption><thead><tr><th>Profile</th><th>Identity path</th><th>What it demonstrates</th></tr></thead><tbody>
+<tr><td>Legacy Podman · 26.8.1</td><td>Local signing script, pre-registered workload client. Separate dynamic CIMD admission experiment.</td><td>A script minted test assertions. Reuse of the same assertion before expiry succeeded in this profile. The recorded draft tests found missing SPIFFE discovery advertisement and acceptance of an omitted client ID in the tested case.</td></tr>
+<tr><td>Headless Docker · 26.8.2</td><td>SPIRE-issued JWT-SVID authenticates a pre-registered workload at Keycloak.</td><td>Authenticated read-only extension inventory, expiry and fresh assertion issuance. No interactive user grant.</td></tr>
+<tr><td>Interactive Docker · 26.8.2</td><td>Public desktop client, authorization code with S256 PKCE, verified user roles and selected scopes.</td><td>Personalized tool discovery and Cedar decisions. Interactive Admin dispatch is disabled.</td></tr>
+<tr><td>Delegated Docker · 26.8.2</td><td>Interactive user grant plus a SPIFFE-authenticated exchange client per capability.</td><td>User and client reads, plus one approved fixture write through the private Admin gateway.</td></tr></tbody></table></div>
+<p class="prose">A Client ID Metadata Document (CIMD) names a client using an HTTPS metadata URL. Controlling admission of metadata and proving possession of an authenticator are distinct jobs. The Docker profiles pre-register the Codex identifier and exact callback. Only the older experiment enables dynamic metadata retrieval. Its localhost admission and same-domain restrictions depend on the local CA and host boundary.</p>
+<p class="refs"><a href="https://datatracker.ietf.org/doc/html/draft-ietf-oauth-client-id-metadata-document-03#section-3">CIMD draft §3</a> · <a href="AUTHN-RESULTS.md">historical results</a> · <a href="SECURITY.md">profile threat model</a></p></section>
+<section class="wrap" id="scale"><h2>Where the evidence ends</h2><p class="prose">The public listener binds to host loopback. TLS terminates at the edge, which forwards to Keycloak over HTTP on a private Docker network. The setup trusts the host, volume backups, local PKI and operator. A short-lived bearer remains usable by its holder until expiry. Local verification can therefore outlive logout or a role change.</p><p class="prose">The live tests cover all three Docker profiles, including expiry and reissuance, empty grants, route restrictions, and approval replay after restart. Multi-host isolation, continuous CA rollover and full disaster recovery require separate evidence. A restored replay database and signer key must belong to the same installation. The guide describes an experimental deployment with a preview Keycloak SPIFFE feature.</p>
+<p class="refs"><a href="DOCKER.md">deployment and restore assumptions</a> · <a href="delivery/acceptance.md">verification coverage</a></p></section>
+<section class="wrap" id="sources"><h2>Protocol and implementation references</h2><p class="lede">RFCs define the protocol mechanisms. The pinned Internet-Drafts record the revisions used in this research. Deployment settings, lifetimes and policy constraints come from the implementation shipped with this guide.</p>
+<ul class="sources">
+<li><a href="https://datatracker.ietf.org/doc/html/rfc9728#section-5.1">RFC 9728 §5.1</a> · resource metadata in a bearer challenge</li>
+<li><a href="https://datatracker.ietf.org/doc/html/rfc7636#section-4">RFC 7636 §4</a> · PKCE challenge and verifier</li>
+<li><a href="https://datatracker.ietf.org/doc/html/rfc9207#section-2">RFC 9207 §2</a> · authorization-response issuer</li>
+<li><a href="https://datatracker.ietf.org/doc/html/rfc8707#section-2">RFC 8707 §2</a> · identifying the protected resource</li>
+<li><a href="https://datatracker.ietf.org/doc/html/rfc8693#section-2">RFC 8693 §2</a> · token exchange</li>
+<li><a href="https://datatracker.ietf.org/doc/html/rfc6750#section-3.1">RFC 6750 §3.1</a> · invalid tokens and insufficient scope</li>
+<li><a href="https://datatracker.ietf.org/doc/html/draft-ietf-oauth-spiffe-client-auth-03">OAuth SPIFFE client authentication, draft -03</a> · issuer audience, client binding and trusted keys</li>
+<li><a href="https://datatracker.ietf.org/doc/html/draft-ietf-oauth-client-id-metadata-document-03">OAuth CIMD, draft -03</a> · client metadata and admission</li>
+<li><a href="https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization">MCP HTTP authorization, 2026-07-28</a> · discovery and challenges. The recorded SDK session negotiated 2025-11-25.</li>
+<li><a href="https://www.keycloak.org/securing-apps/token-exchange">Keycloak standard token exchange</a> · requester and audience configuration</li>
+<li><a href="https://github.com/keycloak/keycloak/blob/26.8.2/common/src/main/java/org/keycloak/common/Profile.java">Keycloak 26.8.2 feature definitions</a> · preview SPIFFE and experimental CIMD</li>
+<li><a href="MCP-DELEGATION.md">Delegated demo runbook</a> · reproduce the allowed read and approved write in the synthetic realm</li>
+</ul></section></main><footer class="wrap"><span>Keycloak MCP · study reference</span><a href="#top">Return to top ↑</a></footer>
+
+<script>
+'use strict';
+/* ============================================================
+   Flow engine: scenario-driven packet animation over SVG paths
+   ============================================================ */
+const NS = 'http://www.w3.org/2000/svg';
+const KIND = {
+  flow:    { c: '#38bdf8', label: 'FLOW' },
+  warn:    { c: '#fbbf24', label: 'DENIAL' },
+  attack:  { c: '#f87171', label: 'ATTACK' },
+  defence: { c: '#34d399', label: 'DEFENCE' },
+  ident:   { c: '#a78bfa', label: 'IDENTITY' }
+};
+const TONE = {
+  slate:  { fill: 'rgba(148,163,184,.06)', stroke: 'rgba(148,163,184,.4)',  ic: '#93a1b8' },
+  sky:    { fill: 'rgba(56,189,248,.08)',  stroke: 'rgba(56,189,248,.5)',   ic: '#38bdf8' },
+  violet: { fill: 'rgba(167,139,250,.08)', stroke: 'rgba(167,139,250,.5)',  ic: '#a78bfa' },
+  green:  { fill: 'rgba(52,211,153,.08)',  stroke: 'rgba(52,211,153,.5)',   ic: '#34d399' },
+  red:    { fill: 'rgba(248,113,113,.08)', stroke: 'rgba(248,113,113,.55)', ic: '#f87171' }
+};
+const ICONS = {
+  user:   ['M12 11.4a3.4 3.4 0 1 0 0-6.8 3.4 3.4 0 0 0 0 6.8z', 'M5.5 19c.8-3.4 3.4-5 6.5-5s5.7 1.6 6.5 5'],
+  app:    ['M4.5 4.5h15a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-15a1 1 0 0 1-1-1v-13a1 1 0 0 1 1-1z', 'M7 9.5l3 2.5-3 2.5', 'M12.5 15h4.5'],
+  server: ['M4 5h16v6H4z', 'M4 13h16v6H4z', 'M7 8h.01', 'M7 16h.01'],
+  shield: ['M12 3.5l7 2.6v5.2c0 4.6-3 7.6-7 9.2-4-1.6-7-4.6-7-9.2V6.1z', 'M9 11.8l2.2 2.2 4-4.2'],
+  key:    ['M8 17.6a3.6 3.6 0 1 0 0-7.2 3.6 3.6 0 0 0 0 7.2z', 'M10.8 11.2L19 3.5', 'M15.5 7l2.5 2.5', 'M13 9.5l2 2'],
+  cloud:  ['M6.5 18a3.5 3.5 0 0 1-.4-6.97A5 5 0 0 1 15.8 9.2 3.8 3.8 0 0 1 17.5 18z'],
+  alert:  ['M12 4L21 19.5H3z', 'M12 10v4.2', 'M12 16.8h.01'],
+  doc:    ['M5 3.5h14v17H5z', 'M8.5 8h7', 'M8.5 11.5h7', 'M8.5 15h4.5'],
+  chip:   ['M6 6h12v12H6z', 'M10 10h4v4h-4z', 'M9 3.5V6', 'M15 3.5V6', 'M9 18v2.5', 'M15 18v2.5', 'M3.5 9H6', 'M3.5 15H6', 'M18 9h2.5', 'M18 15h2.5']
+};
+const REDUCED = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+function el(tag, attrs, parent) {
+  const e = document.createElementNS(NS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  if (parent) parent.appendChild(e);
+  return e;
+}
+
+function buildDiagram(svg, spec) {
+  const edges = new Map(), nodes = new Map();
+  const defs = el('defs', {}, svg);
+  for (const [kind, style] of Object.entries(KIND)) {
+    const marker = el('marker', { id:'arrow-' + kind, viewBox:'0 0 10 10', refX:9, refY:5,
+      markerWidth:5, markerHeight:5, orient:'auto-start-reverse' }, defs);
+    el('path', { d:'M0 0 L10 5 L0 10 z', fill:style.c }, marker);
+  }
+  const eg = el('g', {}, svg);
+  spec.edges.forEach(e => {
+    const p = el('path', { d: e.d, class: 'edge' }, eg);
+    edges.set(e.id, p);
+  });
+  spec.nodes.forEach(n => {
+    const g = el('g', { class: 'node', transform: `translate(${n.x},${n.y})` }, svg);
+    const tone = TONE[n.tone || 'slate'];
+    const box = el('rect', { x: -n.w / 2, y: -n.h / 2, width: n.w, height: n.h, rx: 13, class: 'box' }, g);
+    box.style.fill = tone.fill; box.style.stroke = tone.stroke; box.style.color = tone.stroke;
+    const ig = el('g', { transform: `translate(${-n.w / 2 + 13},-12)`, class: 'ic' }, g);
+    ig.style.stroke = tone.ic;
+    (ICONS[n.icon] || ICONS.server).forEach(d => el('path', { d }, ig));
+    const t = el('text', { x: -n.w / 2 + 44, y: -3, class: 't' }, g);
+    t.textContent = n.title;
+    const s = el('text', { x: -n.w / 2 + 44, y: 15, class: 's' }, g);
+    s.textContent = n.sub;
+    nodes.set(n.id, g);
+  });
+  const halo = el('circle', { r: 11, class: 'packet', visibility: 'hidden', opacity: .22 }, svg);
+  const packet = el('circle', { r: 5.5, class: 'packet', visibility: 'hidden' }, svg);
+  return { svg, edges, nodes, packet, halo };
+}
+
+function createFlow(cfg) {
+  const d = buildDiagram(document.getElementById(cfg.svg), cfg.diagram);
+  const $ = id => document.getElementById(id);
+  const capEl = $(cfg.caption), listEl = $(cfg.list), barEl = $(cfg.bar), countEl = $(cfg.count);
+  const playBtn = $(cfg.play);
+  const scenarios = cfg.scenarios;
+  let key = cfg.defaultScenario, idx = 0, playing = false, gen = 0, speed = 1;
+
+  const steps = () => scenarios[key].steps;
+  const dur = () => REDUCED ? 220 : 950 / speed;
+  const pause = () => REDUCED ? 700 : 1650 / speed;
+
+  /* scenario pills */
+  const pillBox = $(cfg.pills);
+  Object.keys(scenarios).forEach(k => {
+    const b = document.createElement('button');
+    b.className = 'pill' + (scenarios[k].tone === 'attack' ? ' atk' : scenarios[k].tone === 'defence' ? ' def' : '');
+    b.textContent = scenarios[k].label;
+    b.dataset.k = k;
+    b.addEventListener('click', () => setScenario(k));
+    pillBox.appendChild(b);
+  });
+
+  function usedSets() {
+    const ns = new Set(), es = new Set();
+    steps().forEach(s => {
+      if (s.node) ns.add(s.node);
+      if (s.from) ns.add(s.from);
+      if (s.to) ns.add(s.to);
+      if (s.e) es.add(s.e);
+    });
+    return { ns, es };
+  }
+  function applyDim() {
+    const { ns, es } = usedSets();
+    d.nodes.forEach((g, id) => g.classList.toggle('dim', !ns.has(id)));
+    d.edges.forEach((p, id) => p.classList.toggle('dim', !es.has(id)));
+  }
+  function renderList() {
+    listEl.innerHTML = '';
+    steps().forEach((s, i) => {
+      const row = document.createElement('button');
+      row.className = 'steprow';
+      const dot = document.createElement('i');
+      dot.className = 'dot';
+      dot.style.background = KIND[s.k].c;
+      const n = document.createElement('span');
+      n.className = 'n';
+      n.textContent = String(i + 1).padStart(2, '0');
+      const lbl = document.createElement('span');
+      lbl.textContent = s.t;
+      row.append(n, dot, lbl);
+      row.addEventListener('click', () => { stop(); idx = i; showStep(idx, gen); });
+      listEl.appendChild(row);
+    });
+  }
+  function paint() {
+    const s = steps()[idx];
+    const kind = KIND[s.k];
+    capEl.innerHTML = '';
+    const badge = document.createElement('span');
+    badge.className = 'badge ' + s.k;
+    badge.textContent = kind.label;
+    const h = document.createElement('h3');
+    h.textContent = s.t;
+    const p = document.createElement('p');
+    p.textContent = s.d || '';
+    capEl.append(badge, h, p);
+    if (s.n) {
+      const note = document.createElement('div');
+      note.className = 'note';
+      note.style.borderLeftColor = kind.c;
+      note.style.background = kind.c + '14';
+      note.textContent = s.n;
+      capEl.appendChild(note);
+    }
+    [...listEl.children].forEach((r, i) => r.classList.toggle('on', i === idx));
+    const on = listEl.children[idx];
+    if (on.offsetTop < listEl.scrollTop) listEl.scrollTop = on.offsetTop;
+    if (on.offsetTop + on.offsetHeight > listEl.scrollTop + listEl.clientHeight) {
+      listEl.scrollTop = on.offsetTop + on.offsetHeight - listEl.clientHeight;
+    }
+    [...listEl.children].forEach((row,i) => row.setAttribute('aria-current', i === idx ? 'step' : 'false'));
+    pillBox.querySelectorAll('.pill').forEach(p => p.setAttribute('aria-pressed',String(p.dataset.k === key)));
+    barEl.style.width = ((idx + 1) / steps().length * 100) + '%';
+    countEl.textContent = `step ${idx + 1} / ${steps().length}`;
+    pillBox.querySelectorAll('.pill').forEach(p => p.classList.toggle('on', p.dataset.k === key));
+  }
+  function clearHot() {
+    d.nodes.forEach((g,id) => {
+      g.classList.remove('hot');
+      const box = g.querySelector('.box');
+      box.style.stroke = box.style.color = TONE[cfg.diagram.nodes.find(n => n.id === id).tone].stroke;
+    });
+    d.edges.forEach(p => { p.classList.remove('hot'); p.removeAttribute('marker-start'); p.removeAttribute('marker-end'); p.style.stroke = ''; p.style.color = ''; });
+    d.packet.setAttribute('visibility', 'hidden');
+    d.halo.setAttribute('visibility', 'hidden');
+  }
+  function animatePacket(path, rev, color, myGen) {
+    const L = path.getTotalLength();
+    if (REDUCED) return Promise.resolve();
+    const t0 = performance.now();
+    d.packet.setAttribute('fill', color);
+    d.halo.setAttribute('fill', color);
+    d.packet.setAttribute('visibility', 'visible');
+    d.halo.setAttribute('visibility', 'visible');
+    return new Promise(res => {
+      (function frame(t) {
+        if (myGen !== gen) return res();
+        const p = Math.min(1, (t - t0) / dur());
+        const e = p < .5 ? 2 * p * p : 1 - Math.pow(-2 * p + 2, 2) / 2;
+        const pt = path.getPointAtLength(rev ? L * (1 - e) : L * e);
+        d.packet.setAttribute('cx', pt.x); d.packet.setAttribute('cy', pt.y);
+        d.halo.setAttribute('cx', pt.x); d.halo.setAttribute('cy', pt.y);
+        if (p < 1) requestAnimationFrame(frame); else res();
+      })(t0);
+    });
+  }
+  async function showStep(i, myGen) {
+    idx = i;
+    clearHot();
+    paint();
+    const s = steps()[i];
+    const color = KIND[s.k].c;
+    if (s.e) {
+      const path = d.edges.get(s.e);
+      path.classList.add('hot');
+      path.setAttribute(s.rev ? 'marker-start' : 'marker-end', 'url(#arrow-' + s.k + ')');
+      path.style.stroke = color;
+      path.style.color = color;
+      const from = d.nodes.get(s.from), to = d.nodes.get(s.to);
+      if (from) { from.classList.add('hot'); from.querySelector('.box').style.color = color; from.querySelector('.box').style.stroke = color; }
+      await animatePacket(path, !!s.rev, color, myGen);
+      if (myGen !== gen) return;
+      if (to) { to.classList.add('hot'); to.querySelector('.box').style.color = color; to.querySelector('.box').style.stroke = color; }
+    } else if (s.node) {
+      const g = d.nodes.get(s.node);
+      g.classList.add('hot');
+      g.querySelector('.box').style.color = color;
+      g.querySelector('.box').style.stroke = color;
+      await sleep(dur(), myGen);
+    }
+  }
+  function sleep(ms, myGen) {
+    return new Promise(res => {
+      const t0 = performance.now();
+      (function tick(t) {
+        if (myGen !== gen || t - t0 >= ms) return res();
+        requestAnimationFrame(tick);
+      })(t0);
+    });
+  }
+  async function loop() {
+    const myGen = gen;
+    while (playing && myGen === gen) {
+      await showStep(idx, myGen);
+      if (!playing || myGen !== gen) break;
+      await sleep(pause(), myGen);
+      if (!playing || myGen !== gen) break;
+      idx = (idx + 1) % steps().length;
+    }
+  }
+  function stop() { playing = false; gen++; playBtn.textContent = '▶ Play'; }
+  function setScenario(k) {
+    stop();
+    key = k; idx = 0;
+    applyDim(); renderList();
+    showStep(0, gen);
+  }
+  playBtn.addEventListener('click', () => {
+    if (playing) { stop(); }
+    else { playing = true; playBtn.textContent = '❚❚ Pause'; loop(); }
+  });
+  $(cfg.prev).addEventListener('click', () => { stop(); idx = (idx - 1 + steps().length) % steps().length; showStep(idx, gen); });
+  $(cfg.next).addEventListener('click', () => { stop(); idx = (idx + 1) % steps().length; showStep(idx, gen); });
+  $(cfg.restart).addEventListener('click', () => { stop(); idx = 0; showStep(0, gen); });
+  $(cfg.speed).addEventListener('change', e => { speed = parseFloat(e.target.value); });
+
+  applyDim(); renderList(); showStep(0, gen);
+}
+const diagram = {
+  nodes: [
+    {id:'desktop', x:108, y:65, w:180, h:60, icon:'app', title:'Codex desktop', sub:'public client', tone:'sky'},
+    {id:'mcp', x:365, y:65, w:180, h:60, icon:'server', title:'MCP server', sub:'enforcement point', tone:'sky'},
+    {id:'gateway', x:620, y:65, w:184, h:60, icon:'shield', title:'Private gateway', sub:'route + token', tone:'green'},
+    {id:'admin', x:866, y:65, w:172, h:60, icon:'server', title:'Admin REST', sub:'Keycloak roles', tone:'green'},
+    {id:'issuer', x:108, y:220, w:180, h:60, icon:'key', title:'Keycloak', sub:'token issuer', tone:'violet'},
+    {id:'spire', x:365, y:220, w:180, h:60, icon:'chip', title:'SPIRE agent', sub:'Workload API', tone:'violet'},
+    {id:'cedar', x:620, y:220, w:184, h:60, icon:'shield', title:'Cedar', sub:'policy decision', tone:'green'}
+  ],
+  edges: [
+    {id:'call',d:'M198 65 H275'}, {id:'login',d:'M108 95 V190'},
+    {id:'exchange',d:'M306 95 L165 190'}, {id:'identity',d:'M365 95 V190'},
+    {id:'decision',d:'M424 95 L560 190'}, {id:'dispatch',d:'M455 65 H528'},
+    {id:'adminRoute',d:'M712 65 H780'}
+  ]
+};
+// The readable transcript is also the source for the interactive player.
+const traces = {};
+document.querySelectorAll('ol[data-trace]').forEach(list => {
+  const steps = Array.from(list.children, item => ({
+    ...item.dataset,
+    rev: item.dataset.rev === 'true',
+    t: item.querySelector('strong').textContent,
+    d: item.querySelector('span').textContent
+  }));
+  traces[list.dataset.trace] = { label: list.previousElementSibling.textContent, tone: list.dataset.tone, steps };
+});
+createFlow({
+  svg:'end-svg', diagram, scenarios:traces, defaultScenario:'read', pills:'end-pills',
+  caption:'end-caption', list:'end-steps', bar:'end-bar', count:'end-count',
+  play:'end-play', prev:'end-prev', next:'end-next', restart:'end-restart', speed:'end-speed'
+});
+
+const transcript = document.querySelector('.transcript');
+let wasExpanded;
+window.addEventListener('beforeprint', () => { wasExpanded = transcript.open; transcript.open = true; });
+window.addEventListener('afterprint', () => { transcript.open = wasExpanded; });
+
+const cases = [
+  ['Wrong audience','A validly signed desktop token is intended solely for another API. Who rejects it?','MCP rejects the bearer during HTTP authentication (401). A trusted signature identifies the signer. The audience check establishes that MCP is an intended recipient.'],
+  ['Wrong realm','The helpdesk token includes user-read. The call names another realm. Does the exchange run?','The tool handler returns a realm-mismatch denial before Cedar and exchange. The realm in the verified grant bounds the argument a caller may supply.'],
+  ['PDP unavailable','The user, scope and target all match. Cedar misses the decision deadline. Is the read dispatched?','The enforcement point denies the operation and retires the worker. A previously successful call grants no authority to reuse that decision.'],
+  ['Write-only session','A realm administrator selects only locale-write and asks to verify the change with get_user. What happens?','The read needs an issued user-read scope as well as the read entitlement. The entitled caller receives an insufficient-scope challenge. Verification uses a separate read grant.'],
+  ['Exchange fails','An operator signs the locale change. MCP consumes the approval, then Keycloak cannot issue the downstream token. Can the user retry with the same approval?','The write has not reached Admin REST. The approval ID is already in persistent replay storage. A retry needs a fresh operator approval, even after MCP restarts.'],
+  ['Interactive profile','The interactive-only profile permits list_users in Cedar. What does the desktop receive?','The handler returns a tool error because delegated Admin dispatch is disabled in this profile. A Cedar permit records a policy decision. Completing the read also requires a configured downstream path.']
+];
+const select = document.getElementById('case');
+const answer = document.getElementById('answer');
+const reveal = document.getElementById('answerButton');
+cases.forEach(([label],i) => select.add(new Option(label,i)));
+function selectCase() {
+  document.getElementById('question').textContent = cases[select.selectedIndex][1];
+  answer.textContent = cases[select.selectedIndex][2];
+  answer.hidden = true;
+  reveal.textContent = 'Reveal decision';
+  reveal.setAttribute('aria-expanded','false');
+}
+select.addEventListener('change', selectCase);
+reveal.addEventListener('click', () => {
+  answer.hidden = !answer.hidden;
+  reveal.textContent = answer.hidden ? 'Reveal decision' : 'Hide decision';
+  reveal.setAttribute('aria-expanded', String(!answer.hidden));
+});
+selectCase();
+
+</script>
+</body>
+</html>

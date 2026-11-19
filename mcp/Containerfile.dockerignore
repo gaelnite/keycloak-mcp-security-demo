@@ -1,0 +1,9 @@
+**
+!mcp/*.py
+!mcp/*.mjs
+!mcp/package.json
+!mcp/package-lock.json
+!mcp/requirements.txt
+!cedar/*.cedar
+!cedar/*.cedarschema
+!cedar/entities.json

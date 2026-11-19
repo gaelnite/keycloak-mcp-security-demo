@@ -1,0 +1,251 @@
+name: keycloak-mcp-demo
+
+x-demo-env: &demo-env
+  DEMO_PORT: ${KC_MCP_DEMO_PORT:-49443}
+
+x-restricted: &restricted
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+
+x-tools: &tools
+  <<: *restricted
+  image: ${COMPOSE_PROJECT_NAME}-demo-tools
+  entrypoint: [python]
+
+services:
+  bootstrap:
+    <<: *tools
+    build:
+      context: .
+      dockerfile: Containerfile
+      additional_contexts:
+        mcp-runtime: service:mcp
+    user: "0:0"
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER]
+    network_mode: none
+    environment: *demo-env
+    command: [/opt/demo/bootstrap.py]
+    volumes:
+      - installation:/install/state
+      - edge-config:/install/edge
+      - edge-trust:/install/trust
+      - db-secret:/install/db-secret
+      - postgres-data:/install/postgres
+      - keycloak-config:/install/keycloak
+      - spire-config:/install/spire
+      - spire-data:/install/spire-data
+      - spire-control:/install/spire-control
+      - agent-config:/install/agent
+      - agent-data:/install/agent-data
+      - workload-socket:/install/workload
+
+  postgres:
+    <<: *restricted
+    image: docker.io/library/postgres:17-bookworm@sha256:40865bc877a289da75963d97d72b59633f639fc5af7a4e856bfa3714cae5b536
+    user: "999:999"
+    restart: unless-stopped
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
+    networks: [database]
+    environment:
+      POSTGRES_DB: postgres
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD_FILE: /run/db-secret/password
+      POSTGRES_INITDB_ARGS: --auth-host=scram-sha-256 --auth-local=peer
+    volumes:
+      - db-secret:/run/db-secret:ro
+      - postgres-data:/var/lib/postgresql/data
+      - ./init-db.sh:/docker-entrypoint-initdb.d/10-keycloak.sh:ro
+    tmpfs:
+      - /tmp
+      - /run/postgresql:uid=999,gid=999,mode=0700
+    healthcheck:
+      test: [CMD-SHELL, 'PGPASSWORD="$$(cat /run/db-secret/application-password)" psql -w -h 127.0.0.1 -U keycloak -d keycloak -Atqc "select 1" | grep -qx 1']
+      interval: 2s
+      timeout: 2s
+      retries: 40
+
+  spire-server:
+    <<: *restricted
+    image: ghcr.io/spiffe/spire-server:1.16.0@sha256:ff546f4c62dafc479a0cd79eae9a7b6df2975754d75efd31706098e0d7548837
+    restart: unless-stopped
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
+    networks: [attestation, bundle]
+    command: [-config, /conf/server.conf]
+    volumes:
+      - spire-config:/conf:ro
+      - spire-data:/data
+      - spire-control:/run/spire-control
+    tmpfs: [/tmp]
+    healthcheck:
+      test: [CMD, /opt/spire/bin/spire-server, healthcheck, -socketPath, /run/spire-control/api.sock]
+      interval: 2s
+      timeout: 2s
+      retries: 40
+
+  register:
+    <<: *tools
+    user: "1000:1000"
+    network_mode: none
+    depends_on:
+      spire-server:
+        condition: service_healthy
+    command: [/opt/demo/register.py]
+    volumes:
+      - edge-trust:/trust:ro
+      - spire-control:/run/spire-control:ro
+
+  spire-agent:
+    <<: *restricted
+    image: ghcr.io/spiffe/spire-agent:1.16.0@sha256:ab3a8ce70435374cc5d84c81eabf0278dc046ddbc0a736d59694ba9e5975b1b6
+    restart: unless-stopped
+    cap_add: [SYS_PTRACE]
+    depends_on:
+      register:
+        condition: service_completed_successfully
+    networks: [attestation]
+    command: [-config, /conf/agent.conf]
+    volumes:
+      - agent-config:/conf:ro
+      - agent-data:/data
+      - workload-socket:/run/workload
+    tmpfs: [/tmp]
+    healthcheck:
+      test: [CMD, /opt/spire/bin/spire-agent, healthcheck, -socketPath, /run/workload/api.sock]
+      interval: 2s
+      timeout: 2s
+      retries: 40
+
+  keycloak:
+    <<: *restricted
+    build:
+      context: .
+      dockerfile: Containerfile.keycloak
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      spire-server:
+        condition: service_healthy
+    networks: [identity, database, bundle]
+    entrypoint: [/bin/bash, -ec]
+    command:
+      - |
+        export KC_DB_PASSWORD="$$(cat /config/db-password)"
+        mkdir -m 0700 -p /opt/keycloak/data/import
+        cp /config/lab-realm.json /opt/keycloak/data/import/
+        exec /opt/keycloak/bin/kc.sh start --optimized --import-realm
+    environment:
+      KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak
+      KC_DB_USERNAME: keycloak
+      KC_HOSTNAME: https://localhost:${KC_MCP_DEMO_PORT:-49443}
+      KC_HTTP_ENABLED: "true"
+      KC_CACHE: local
+      KC_HTTP_MANAGEMENT_SCHEME: http
+      KC_PROXY_HEADERS: xforwarded
+      KC_TRUSTSTORE_PATHS: /config/bundle-ca.pem
+    volumes:
+      - keycloak-config:/config:ro
+    tmpfs:
+      - /tmp
+      - /opt/keycloak/data:uid=1000,gid=0,mode=0700
+    healthcheck:
+      test:
+        - CMD
+        - /bin/bash
+        - -ec
+        - "exec 3<>/dev/tcp/127.0.0.1/9000 && printf 'GET /health/ready HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3 && head -n1 <&3 | grep -q '200'"
+      interval: 3s
+      timeout: 3s
+      retries: 45
+
+  edge:
+    <<: *restricted
+    image: docker.io/library/nginx:1.28-alpine@sha256:a8b39bd9cf0f83869a2162827a0caf6137ddf759d50a171451b335cecc87d236
+    user: "101:101"
+    restart: unless-stopped
+    depends_on:
+      keycloak:
+        condition: service_healthy
+    networks: [frontend, identity]
+    entrypoint: [nginx, -c, /tls/nginx.conf, -g, "daemon off;"]
+    ports:
+      - 127.0.0.1:${KC_MCP_DEMO_PORT:-49443}:${KC_MCP_DEMO_PORT:-49443}
+    volumes:
+      - edge-config:/tls:ro
+      - edge-trust:/trust:ro
+    tmpfs: [/tmp]
+
+  mcp:
+    <<: *restricted
+    build:
+      context: ../..
+      dockerfile: mcp/Containerfile
+      args:
+        NODE_IMAGE: docker.io/library/node:24-bookworm-slim@sha256:dc26ae92c9fb15cf6b1d63e20f0944b2efe0f115b20e00be48fb23fceb061c54
+    restart: unless-stopped
+    network_mode: service:edge
+    volumes:
+      - edge-trust:/trust:ro
+    depends_on:
+      edge:
+        condition: service_started
+        restart: true
+    tmpfs: [/tmp]
+    environment:
+      <<: *demo-env
+      KC_URL: https://localhost:${KC_MCP_DEMO_PORT:-49443}
+      KC_ISSUER: https://localhost:${KC_MCP_DEMO_PORT:-49443}/realms/lab
+      KC_MCP_RESOURCE_URL: https://localhost:${KC_MCP_DEMO_PORT:-49443}/mcp
+      KC_ALLOWED_CLIENT_IDS: mcp-workload
+      KC_MCP_CLIENT_ENTITY_MAP: '{"mcp-workload":"mcp-claude"}'
+      KC_MCP_TOOL_ALLOWLIST: get_extension_inventory
+      KC_CLOCK_SKEW: "0"
+      SSL_CERT_FILE: /trust/edge-ca.pem
+      PYTHONDONTWRITEBYTECODE: "1"
+    healthcheck:
+      test: [CMD-SHELL, 'curl -fsS --max-time 2 --cacert /trust/edge-ca.pem "https://localhost:$${DEMO_PORT}/healthz"']
+      interval: 3s
+      timeout: 3s
+      retries: 30
+
+  workload:
+    <<: *tools
+    profiles: [checks]
+    user: "10001:10001"
+    pid: service:spire-agent
+    network_mode: service:edge
+    command: [/opt/demo/workload.py]
+    environment: *demo-env
+    volumes:
+      - edge-trust:/trust:ro
+      - workload-socket:/run/workload:ro
+
+networks:
+  frontend:
+  identity:
+    internal: true
+  database:
+    internal: true
+  bundle:
+    internal: true
+  attestation:
+    internal: true
+
+volumes:
+  installation:
+  edge-config:
+  edge-trust:
+  db-secret:
+  postgres-data:
+  keycloak-config:
+  spire-config:
+  spire-data:
+  spire-control:
+  agent-config:
+  agent-data:
+  workload-socket:

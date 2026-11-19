@@ -1,0 +1,34 @@
+services:
+  bootstrap:
+    environment:
+      DEMO_PROFILE: interactive
+    volumes:
+      - desktop-fixtures:/install/desktop-fixtures
+
+  mcp:
+    environment:
+      KC_ALLOWED_CLIENT_IDS: mcp-workload https://chatgpt.com/oauth/codex/client.json
+      KC_MCP_INTERACTIVE_CLIENT_IDS: https://chatgpt.com/oauth/codex/client.json
+      KC_MCP_TOOL_ALLOWLIST: get_extension_inventory list_users get_user list_clients get_client set_user_locale
+      KC_MCP_AUDIT_LOG: /tmp/keycloak-mcp-audit.jsonl
+
+  desktop-check:
+    image: ${COMPOSE_PROJECT_NAME}-demo-tools
+    pull_policy: never
+    profiles: [checks]
+    user: "10002:10002"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    network_mode: service:edge
+    entrypoint: [python, /opt/demo/desktop_check.py]
+    logging:
+      driver: none
+    environment:
+      DEMO_PORT: ${KC_MCP_DEMO_PORT:-49443}
+    volumes:
+      - edge-trust:/trust:ro
+      - desktop-fixtures:/fixtures:ro
+
+volumes:
+  desktop-fixtures:

@@ -1,0 +1,78 @@
+services:
+  bootstrap:
+    environment:
+      DEMO_PROFILE: delegated
+    volumes:
+      - approval-operator:/install/approval-operator
+      - approval-state:/install/approval-state
+      - delegate:/install/delegate
+
+  register:
+    environment:
+      DEMO_PROFILE: delegated
+    volumes:
+      - delegate:/delegate:ro
+
+  mcp:
+    user: "10003:10001"
+    pid: service:spire-agent
+    depends_on:
+      spire-agent:
+        condition: service_healthy
+    environment:
+      KC_MCP_DELEGATED_ADMIN_URL: https://localhost:8801
+      KC_MCP_DELEGATED_CA_FILE: /trust/edge-ca.pem
+      KC_MCP_SPIFFE_TRUST_DOMAIN: mcp.demo
+      KC_MCP_SPIFFE_WORKLOAD_SOCKET: /run/workload/api.sock
+      KC_MCP_SPIFFE_EXECUTABLE: /delegate/spire-agent
+      KC_MCP_ENABLE_WRITES: "1"
+      KC_MCP_APPROVAL_PUBLIC_KEY_FILE: /delegate/approval.pub
+      KC_MCP_APPROVAL_AUDIENCE: https://localhost:${KC_MCP_DEMO_PORT:-49443}/mcp
+      KC_MCP_APPROVAL_MAX_TTL: "90"
+      KC_MCP_APPROVAL_REPLAY_DB: /approvals/used.sqlite3
+      KC_MCP_AUDIT_LOG: /approvals/decisions.jsonl
+    volumes:
+      - delegate:/delegate:ro
+      - approval-state:/approvals
+      - workload-socket:/run/workload:ro
+
+  approval-signer:
+    image: ${COMPOSE_PROJECT_NAME}-demo-tools
+    pull_policy: never
+    profiles: [operator]
+    user: "10004:10004"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    network_mode: none
+    entrypoint: [python, /opt/demo/sign_approval.py]
+    logging:
+      driver: none
+    environment:
+      DEMO_PORT: ${KC_MCP_DEMO_PORT:-49443}
+    volumes:
+      - approval-operator:/operator:ro
+
+  delegation-probe:
+    image: ${COMPOSE_PROJECT_NAME}-demo-tools
+    pull_policy: never
+    profiles: [checks]
+    user: "10003:10001"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    network_mode: service:edge
+    pid: service:spire-agent
+    entrypoint: [python, /opt/demo/delegation_probe.py]
+    logging:
+      driver: none
+    environment:
+      DEMO_PORT: ${KC_MCP_DEMO_PORT:-49443}
+    volumes:
+      - edge-trust:/trust:ro
+      - workload-socket:/run/workload:ro
+
+volumes:
+  approval-operator:
+  approval-state:
+  delegate:

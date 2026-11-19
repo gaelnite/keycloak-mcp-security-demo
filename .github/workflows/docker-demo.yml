@@ -1,0 +1,71 @@
+name: Docker demo
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/docker-demo.yml
+      - cedar/**
+      - deploy/docker/**
+      - mcp/**
+      - scripts/verify-delegation.py
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/docker-demo.yml
+      - cedar/**
+      - deploy/docker/**
+      - mcp/**
+      - scripts/verify-delegation.py
+
+permissions:
+  contents: read
+
+jobs:
+  compose-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      matrix:
+        include:
+          - profile: headless
+            compose: deploy/docker/compose.yaml
+          - profile: interactive
+            compose: deploy/docker/compose.yaml:deploy/docker/compose.interactive.yaml
+          - profile: delegated
+            compose: deploy/docker/compose.yaml:deploy/docker/compose.interactive.yaml:deploy/docker/compose.delegated.yaml
+    env:
+      COMPOSE_PROJECT_NAME: keycloak-mcp-ci
+      COMPOSE_FILE: ${{ matrix.compose }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate the Compose graph
+        run: docker compose config --quiet
+      - name: Add a harmless local configuration marker
+        if: matrix.profile == 'headless'
+        run: touch mcp/context-check.env
+      - name: Build and start the isolated demo
+        run: docker compose up --build --wait --wait-timeout 120
+      - name: Check that local configuration is absent from the MCP image
+        if: matrix.profile == 'headless'
+        run: docker compose exec -T mcp test ! -e /app/mcp/context-check.env
+      - name: Verify TLS, SPIRE, Cedar and scope denial
+        if: matrix.profile == 'headless'
+        run: docker compose run -T --rm --no-deps workload /opt/demo/workload.py --expiry-check
+      - name: Verify role-scoped login, refresh and Cedar
+        if: matrix.profile == 'interactive'
+        run: docker compose run -T --rm --no-deps desktop-check
+      - uses: actions/setup-python@v5
+        if: matrix.profile == 'delegated'
+        with:
+          python-version: '3.12'
+      - name: Verify SPIFFE delegation, route bounds and approval persistence
+        if: matrix.profile == 'delegated'
+        run: |
+          python -m pip install -r mcp/requirements.txt
+          python scripts/verify-delegation.py --project "$COMPOSE_PROJECT_NAME" --port 49443
+      - name: Report service status
+        if: failure()
+        run: docker compose ps --all
+      - name: Stop the demo
+        if: always()
+        run: docker compose stop
