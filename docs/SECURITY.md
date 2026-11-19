@@ -4,7 +4,8 @@ The showcase runs on one trusted Docker host with a synthetic Keycloak realm.
 Its security question is whether a particular user, with a particular desktop
 grant, may perform one operation through an authenticated MCP workload.
 A Cedar permit authorizes dispatch. Keycloak still decides whether to serve
-the resulting Admin request. [Delegated demo](MCP-DELEGATION.md)
+the resulting Admin request. [Delegated demo](MCP-DELEGATION.md) ·
+[Threat model and verification evidence](THREAT-MODEL.md)
 
 ## Which profile demonstrates which property?
 
