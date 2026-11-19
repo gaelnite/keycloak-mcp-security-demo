@@ -35,5 +35,5 @@ rows, denied reads of the other collection, and rejected exchange for empty
 grants. Each new capability adds a client, a SPIFFE registration, and tests of
 the actual Admin operation. Keycloak's realm-specific Admin audience and
 `kc-admin-api` scope are version-specific findings.
-[Keycloak 26.8.2 experiment](../delivery/keycloak-26.8.2.md) ·
+[Keycloak 26.8.2 experiment](../evidence/keycloak-26.8.2.md) ·
 [Delegated verification](../../scripts/verify-delegation.py)

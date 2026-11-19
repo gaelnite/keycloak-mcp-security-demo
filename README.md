@@ -1,28 +1,49 @@
 # Keycloak MCP security reference (experimental)
 
-Keycloak authenticates the user, SPIRE attests the MCP workload, and Cedar
-decides whether a tool may run. The workload exchanges the user's grant for a
-short-lived credential scoped to the permitted Admin operation.
+This demo asks how a desktop user can delegate a narrow Keycloak Admin operation
+to an MCP server. It separates the user's grant, the workload's identity, the
+tool policy, and the authority of the token sent to Admin REST.
 
-![A read request moves from desktop sign-in to the MCP server, which checks Cedar, obtains a SPIRE identity, exchanges the grant at Keycloak, and calls Admin REST through a private gateway.](docs/assets/mcp-auth-flow.gif)
+![A delegated read goes from desktop sign-in to the MCP server, which checks Cedar, obtains a SPIRE identity, exchanges the grant at Keycloak, and calls Admin REST through a private gateway.](docs/assets/mcp-auth-flow.gif)
 
-[Interactive guide](https://github.com/gaelnite/keycloak-mcp-security-demo/blob/main/docs/mcp-auth-evolution.html) · Open the HTML locally to step through an allowed read, an approved write, and a missing-scope denial.
+[Interactive guide](https://github.com/gaelnite/keycloak-mcp-security-demo/blob/main/docs/mcp-auth-evolution.html) · Open the HTML locally to trace an allowed read, an approved write, and a missing-scope denial.
 
-The Docker demo uses Keycloak 26.8.2 with its **preview SPIFFE feature**. It
-pre-registers the desktop client. Dynamic Client ID Metadata Document (CIMD)
-admission belongs to the archived 26.8.1 lab.
+## Architecture
 
-The OAuth SPIFFE and CIMD texts are Internet-Drafts. The example runs on a single
-trusted host with synthetic realm data.
-[Security model](docs/SECURITY.md)
-[Keycloak feature definitions](https://github.com/keycloak/keycloak/blob/26.8.2/common/src/main/java/org/keycloak/common/Profile.java)
-[SPIFFE draft](https://datatracker.ietf.org/doc/draft-ietf-oauth-spiffe-client-auth/03/)
-[CIMD draft](https://datatracker.ietf.org/doc/draft-ietf-oauth-client-id-metadata-document/03/)
+1. **Desktop grant.** A pre-registered Codex client signs in with authorization
+   code and S256 PKCE. OAuth protected-resource metadata identifies the issuer.
+   The authorization request identifies the intended MCP resource. Keycloak
+   issues scopes from the intersection of the user's entitlement and selection.
+   [MCP OAuth](docs/MCP-OAUTH.md) · [RFC 9728](https://www.rfc-editor.org/rfc/rfc9728.html#section-5.1) · [RFC 8707](https://www.rfc-editor.org/rfc/rfc8707.html#section-2)
+2. **Tool decision.** MCP verifies the current access token and checks the issued
+   scope and user entitlement. Cedar evaluates the verified principal, tool,
+   and realm. The write also requires a fresh operator-signed approval.
+   [Cedar authorization](docs/AUTHZ.md) · [Threat model and tests](docs/THREAT-MODEL.md)
+3. **Workload and exchange.** SPIRE supplies a JWT-SVID for the selected
+   capability's exchange client. Keycloak exchanges the human grant for a
+   distinct, short-lived Admin token. MCP validates the subject, requester,
+   audience, scopes, lifetime, and role ceiling before dispatch.
+   [RFC 8693](https://www.rfc-editor.org/rfc/rfc8693.html#section-2.1) · [Keycloak 26.8.2 evidence](docs/evidence/keycloak-26.8.2.md)
+4. **Admin operation.** A private gateway constrains the method, path, and query.
+   Keycloak enforces backend permissions. MCP projects read results and
+   constructs the only allowed write, a locale change for a disabled fixture
+   account. [Delegated credential and route boundaries](docs/MCP-DELEGATION.md#credential-and-route-boundaries)
 
-## Run the delegated demo
+The architecture decisions explain why the demo uses Cedar, SPIRE, one requester
+per capability, single-use approvals, and a private Admin gateway.
+[Architecture decisions](docs/decisions/README.md) · [Verification coverage](docs/evidence/acceptance.md)
 
-From the repository root, use Docker with Compose v2 and a free loopback port.
-The command below uses the same project and HTTPS port as the delegation runbook.
+## Limits and roadmap
+
+The demo uses a single trusted Docker host, a synthetic realm, and Keycloak
+26.8.2 with its preview SPIFFE provider. The exercised MCP protocol revision
+is `2025-11-25`. Deployment recovery, automatic trust rollover, central audit
+retention, and multi-host operation remain open.
+[Security model](docs/SECURITY.md) · [Operational roadmap](docs/SECURITY.md#operational-roadmap)
+
+## Quickstart
+
+From the repository root, use Docker Compose v2 and a free loopback port.
 
 ```sh
 KC_MCP_DEMO_PORT=49448 docker compose -p keycloak-mcp-delegated \
@@ -32,56 +53,26 @@ KC_MCP_DEMO_PORT=49448 docker compose -p keycloak-mcp-delegated \
   up --build -d --wait
 ```
 
-The MCP endpoint is `https://localhost:49448/mcp`.
+The installer generates fixture credentials. Export the demo CA, sign in as
+helpdesk, and select `keycloak.users.read` to try an allowed read at
+`https://localhost:49448/mcp`. Realm administrators can also select client
+reads and the fixture locale write. With no selected scopes, desktop discovery
+is empty. [Run the delegated demo](docs/MCP-DELEGATION.md) · [Desktop sign-in and scopes](docs/MCP-INTERACTIVE.md)
 
-Follow the runbook to export the installation's CA, sign in and verify an allowed read. The installer creates
-demo passwords for each installation.
-[Delegation runbook](docs/MCP-DELEGATION.md)
-[Desktop sign-in and scope selection](docs/MCP-INTERACTIVE.md)
+## Runbooks and reference
 
-| Demo role | Scopes the user may select |
+| Task | Guide |
 | --- | --- |
-| Helpdesk | `keycloak.users.read` |
-| Realm administrator | `keycloak.users.read`, `keycloak.clients.read`, `keycloak.users.locale.write` |
-
-Users can select any subset of the scopes their role allows. If they select
-none, the desktop client shows no tools from this MCP server. In the delegated
-profile, a realm admin can change the language preference of a designated
-disabled test account. Each attempt requires a fresh approval from an operator.
-
-## Follow one tool call
-
-1. **Desktop grant.** Codex uses authorization code with S256 PKCE and an exact
-   loopback callback. Keycloak issues an MCP access token for the user's selected
-   scopes and eligible exchange clients. [MCP OAuth](docs/MCP-OAUTH.md)
-2. **Tool authorization.** MCP verifies the token and checks the tool against the
-   selected scope, entitlement and deployment configuration. Cedar evaluates
-   the verified user, tool and realm. [Cedar authorization](docs/AUTHZ.md)
-3. **Workload authentication.** For an allowed Admin call, MCP obtains a fresh
-   JWT-SVID from SPIRE. It authenticates to Keycloak as the capability's exchange
-   client and requests a distinct Admin token for the same user. [Delegation](docs/MCP-DELEGATION.md)
-4. **Admin operation.** MCP validates the exchanged token before sending it to the
-   private gateway. The gateway restricts the method, route and query. Keycloak
-   checks backend permissions and MCP returns only the documented response fields.
-   [Keycloak 26.8.2 results](docs/delivery/keycloak-26.8.2.md)
-
-## Other entry points
-
-| To explore | Start here |
-| --- | --- |
-| Attested headless access and a Cedar smoke test | [Headless Docker demo](docs/DOCKER.md) |
-| Role-scoped desktop discovery with Admin dispatch disabled | [Interactive profile](docs/MCP-INTERACTIVE.md) |
-| Script-issued SVIDs, dynamic CIMD and the legacy token-passthrough profile | [Archived Podman deployment](https://github.com/gaelnite/keycloak-mcp-security-demo/blob/archive/legacy-podman-26.8.1/docs/DEPLOYMENT.md) and [26.8.1 results](https://github.com/gaelnite/keycloak-mcp-security-demo/blob/archive/legacy-podman-26.8.1/docs/AUTHN-RESULTS.md) |
-| Local tests, policy validation and contribution process | [Contributing](CONTRIBUTING.md) |
-| Trust assumptions, limitations and vulnerability reporting | [Security model](docs/SECURITY.md) and [security policy](SECURITY.md) |
-
-The MCP HTTP discovery and challenge implementation targets the 2026-07-28
-authorization specification. The recorded SDK session negotiated protocol version
-`2025-11-25`. [MCP authorization specification](https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization)
+| Verify workload authentication with an inventory read | [Headless profile](docs/DOCKER.md) |
+| Try user grants with Admin dispatch disabled | [Interactive profile](docs/MCP-INTERACTIVE.md) |
+| Start, stop, back up, or inspect the fixture | [Operations](docs/OPERATIONS.md) |
+| Work on the server or run verification | [Server reference](docs/MCP-SERVER.md) · [Contributing](CONTRIBUTING.md) |
+| Review the protocol findings and implementation | [Evidence index](docs/evidence/README.md) |
+| Review the historical Podman and dynamic CIMD research | [Protected archive](https://github.com/gaelnite/keycloak-mcp-security-demo/tree/archive/legacy-podman-26.8.1) |
+| Report a vulnerability privately | [Security policy](SECURITY.md) |
 
 ## Credits and license
 
 The Cedar integration draws on the PEP/PDP pattern in
 [openclaw-cedar-policy-demo](https://github.com/windley/openclaw-cedar-policy-demo).
-See the [third-party notices](NOTICE), [historical extension review](https://github.com/gaelnite/keycloak-mcp-security-demo/blob/archive/legacy-podman-26.8.1/docs/EXTENSIONS.md)
-and [Apache 2.0 license](LICENSE).
+[Third-party notices](NOTICE) · [Apache 2.0 license](LICENSE)

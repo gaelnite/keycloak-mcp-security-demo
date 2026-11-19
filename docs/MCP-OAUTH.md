@@ -1,9 +1,11 @@
 # HTTP OAuth discovery and scope challenges
 
 Set `KC_MCP_RESOURCE_URL` to the canonical HTTPS URL clients use to reach MCP.
-Tokens must contain that exact value in `aud`. If `KC_AUDIENCE` is also set, it
-must equal the resource URL. `KC_ISSUER` is the Keycloak realm issuer used for
-token validation and discovery. An exact client-ID allowlist is also required.
+The desktop identifies that resource in its authorization request. Tokens must
+include the exact URL in `aud`. If `KC_AUDIENCE` is also set, it must match
+the resource URL. Set `KC_ISSUER` to the realm issuer used for token validation
+and discovery, and configure an exact client-ID allowlist.
+[RFC 8707 §2](https://www.rfc-editor.org/rfc/rfc8707.html#section-2)
 
 ```sh
 export KC_URL=https://keycloak.example.test
@@ -29,11 +31,12 @@ curl -i https://mcp.example.test/mcp
 
 The public protected-resource metadata advertises the canonical resource, the
 authorization server and bearer-header method. Unauthenticated MCP requests
-receive a `401` Bearer challenge linking to the metadata. Initialization and
-`tools/list` require a valid access token; zero tool scopes are allowed. In the
-legacy profile, discovery returns the registered inventory. With interactive
-clients configured, discovery filters by token entitlement and scope. Calls
-always check the actual grant.
+receive a `401` Bearer challenge linking to the metadata. [RFC 9728 §5.1](https://www.rfc-editor.org/rfc/rfc9728.html#section-5.1)
+
+A valid access token can initialize MCP and list tools with zero tool scopes.
+In workload-only mode, discovery returns the registered inventory. With
+interactive clients configured, discovery filters by token entitlement and
+scope. Calls always check the actual grant.
 
 An authenticated `tools/call` rejected for a missing scope returns HTTP `403`
 with `error="insufficient_scope"`, the metadata URL and the required tool scope.

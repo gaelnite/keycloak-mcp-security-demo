@@ -62,6 +62,8 @@ issues a distinct access token with the exact Admin audience, the selected
 capability scope plus `kc-admin-api` and no refresh token. The demo configures a
 45-second exchanged-token lifespan; MCP rejects tokens over 60 seconds and
 validates the subject, audience, requester, scopes and role ceiling before dispatch.
+[RFC 8693 §2.1](https://www.rfc-editor.org/rfc/rfc8693.html#section-2.1) ·
+[Keycloak 26.8.2 exchange evidence](evidence/keycloak-26.8.2.md)
 
 The desktop bearer is sent to Keycloak only as the exchange subject token. Admin
 REST receives the exchanged token through a private HTTPS gateway. The public
