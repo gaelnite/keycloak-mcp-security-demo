@@ -50,10 +50,18 @@ decision log. [Authorization](AUTHZ.md) · [Policy enforcement code](../mcp/pep.
   volume backups. Restore the database, keys and replay state together. Wait
   for outstanding approvals to expire after a rollback. Remove exported fixture
   credentials and local CA trust when retiring the demo. [Docker lifecycle](DOCKER.md)
-- **Operational coverage.** The example does not exercise high availability,
-  continuous CA rollover, centralized audit retention or disaster recovery.
-  Scope a separate review for a shared network, a real tenant or different
-  Keycloak, SPIRE or MCP versions.
+## Operational roadmap
+
+1. **Audit retention.** Export redacted decisions to a restricted,
+   append-only sink. Define access and retention, then test records for
+   redaction, delivery failure, and the configured fail-closed behaviour.
+2. **Signing-key and trust-bundle rollover.** Rehearse overlapping keys and
+   bundle refresh between SPIRE and Keycloak. Verify both keys during the
+   overlap and rejection of the retired key after cutover.
+3. **Multi-host deployment and recovery.** Move approval consumption to a
+   shared atomic store and coordinate issuer, signer, and replay recovery.
+   Test failover and confirm that two replicas racing the same approval
+   produce exactly one successful consumption.
 
 ## Historical research
 

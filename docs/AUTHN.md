@@ -33,7 +33,7 @@ the original settings, runbook, and tests.
 ## Protocol and evidence scope
 
 The Docker profile exercises SPIRE-backed authentication and token exchange
-with pre-registered clients. Its [26.8.2 experiment](delivery/keycloak-26.8.2.md)
+with pre-registered clients. Its [26.8.2 experiment](evidence/keycloak-26.8.2.md)
 records version-specific results. Draft-wide interoperability remains outside
 the verification scope.
 
