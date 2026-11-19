@@ -3,36 +3,6 @@
 // scoped to exactly one tool, the caller's realm and (for extensions) an installed
 // extension. Generic forbids below override every permit.
 
-@id("kc-read-list-realms")
-permit(
-  principal,
-  action == KeycloakMCP::Action::"Read",
-  resource == KeycloakMCP::Tool::"list_realms"
-)
-when {
-  context.toolKnown
-  && resource.tier == "read"
-  && principal.scopes.contains(resource.requiredScope)
-  && principal in context.resource.realm
-  && (resource.extension == "core" || context.extensions.contains(resource.extension))
-  && !(principal is KeycloakMCP::User)
-};
-
-@id("kc-read-get-realm")
-permit(
-  principal,
-  action == KeycloakMCP::Action::"Read",
-  resource == KeycloakMCP::Tool::"get_realm"
-)
-when {
-  context.toolKnown
-  && resource.tier == "read"
-  && principal.scopes.contains(resource.requiredScope)
-  && principal in context.resource.realm
-  && (resource.extension == "core" || context.extensions.contains(resource.extension))
-  && !(principal is KeycloakMCP::User)
-};
-
 @id("kc-read-list-clients")
 permit(
   principal,
@@ -93,81 +63,6 @@ when {
   && (!(principal is KeycloakMCP::User) || principal.roles.contains("mcp-users-read"))
 };
 
-@id("kc-read-list-groups")
-permit(
-  principal,
-  action == KeycloakMCP::Action::"Read",
-  resource == KeycloakMCP::Tool::"list_groups"
-)
-when {
-  context.toolKnown
-  && resource.tier == "read"
-  && principal.scopes.contains(resource.requiredScope)
-  && principal in context.resource.realm
-  && (resource.extension == "core" || context.extensions.contains(resource.extension))
-  && !(principal is KeycloakMCP::User)
-};
-
-@id("kc-read-list-roles")
-permit(
-  principal,
-  action == KeycloakMCP::Action::"Read",
-  resource == KeycloakMCP::Tool::"list_roles"
-)
-when {
-  context.toolKnown
-  && resource.tier == "read"
-  && principal.scopes.contains(resource.requiredScope)
-  && principal in context.resource.realm
-  && (resource.extension == "core" || context.extensions.contains(resource.extension))
-  && !(principal is KeycloakMCP::User)
-};
-
-@id("kc-read-list-events")
-permit(
-  principal,
-  action == KeycloakMCP::Action::"Read",
-  resource == KeycloakMCP::Tool::"list_events"
-)
-when {
-  context.toolKnown
-  && resource.tier == "read"
-  && principal.scopes.contains(resource.requiredScope)
-  && principal in context.resource.realm
-  && (resource.extension == "core" || context.extensions.contains(resource.extension))
-  && !(principal is KeycloakMCP::User)
-};
-
-@id("kc-read-list-admin-events")
-permit(
-  principal,
-  action == KeycloakMCP::Action::"Read",
-  resource == KeycloakMCP::Tool::"list_admin_events"
-)
-when {
-  context.toolKnown
-  && resource.tier == "read"
-  && principal.scopes.contains(resource.requiredScope)
-  && principal in context.resource.realm
-  && (resource.extension == "core" || context.extensions.contains(resource.extension))
-  && !(principal is KeycloakMCP::User)
-};
-
-@id("kc-read-metrics-health-summary")
-permit(
-  principal,
-  action == KeycloakMCP::Action::"Read",
-  resource == KeycloakMCP::Tool::"metrics_health_summary"
-)
-when {
-  context.toolKnown
-  && resource.tier == "read"
-  && principal.scopes.contains(resource.requiredScope)
-  && principal in context.resource.realm
-  && (resource.extension == "core" || context.extensions.contains(resource.extension))
-  && !(principal is KeycloakMCP::User)
-};
-
 @id("kc-read-get-extension-inventory")
 permit(
   principal,
@@ -183,98 +78,6 @@ when {
   && !(principal is KeycloakMCP::User)
 };
 
-@id("kc-read-list-organizations")
-permit(
-  principal,
-  action == KeycloakMCP::Action::"Read",
-  resource == KeycloakMCP::Tool::"list_organizations"
-)
-when {
-  context.toolKnown
-  && resource.tier == "read"
-  && principal.scopes.contains(resource.requiredScope)
-  && principal in context.resource.realm
-  && (resource.extension == "core" || context.extensions.contains(resource.extension))
-  && !(principal is KeycloakMCP::User)
-};
-
-@id("kc-read-get-organization")
-permit(
-  principal,
-  action == KeycloakMCP::Action::"Read",
-  resource == KeycloakMCP::Tool::"get_organization"
-)
-when {
-  context.toolKnown
-  && resource.tier == "read"
-  && principal.scopes.contains(resource.requiredScope)
-  && principal in context.resource.realm
-  && (resource.extension == "core" || context.extensions.contains(resource.extension))
-  && !(principal is KeycloakMCP::User)
-};
-
-@id("kc-read-get-home-idp-config")
-permit(
-  principal,
-  action == KeycloakMCP::Action::"Read",
-  resource == KeycloakMCP::Tool::"get_home_idp_config"
-)
-when {
-  context.toolKnown
-  && resource.tier == "read"
-  && principal.scopes.contains(resource.requiredScope)
-  && principal in context.resource.realm
-  && (resource.extension == "core" || context.extensions.contains(resource.extension))
-  && !(principal is KeycloakMCP::User)
-};
-
-@id("kc-read-inspect-restrict-client-auth-flow")
-permit(
-  principal,
-  action == KeycloakMCP::Action::"Read",
-  resource == KeycloakMCP::Tool::"inspect_restrict_client_auth_flow"
-)
-when {
-  context.toolKnown
-  && resource.tier == "read"
-  && principal.scopes.contains(resource.requiredScope)
-  && principal in context.resource.realm
-  && (resource.extension == "core" || context.extensions.contains(resource.extension))
-  && !(principal is KeycloakMCP::User)
-};
-
-@id("kc-admin-config-cli-diff")
-permit(
-  principal,
-  action == KeycloakMCP::Action::"Admin",
-  resource == KeycloakMCP::Tool::"config_cli_diff"
-)
-when {
-  context.toolKnown
-  && resource.tier == "admin"
-  && principal.scopes.contains(resource.requiredScope)
-  && principal in context.resource.realm
-  && (resource.extension == "core" || context.extensions.contains(resource.extension))
-  && !(principal is KeycloakMCP::User)
-  && principal.admin
-};
-
-@id("kc-admin-kcwarden-audit")
-permit(
-  principal,
-  action == KeycloakMCP::Action::"Admin",
-  resource == KeycloakMCP::Tool::"kcwarden_audit"
-)
-when {
-  context.toolKnown
-  && resource.tier == "admin"
-  && principal.scopes.contains(resource.requiredScope)
-  && principal in context.resource.realm
-  && (resource.extension == "core" || context.extensions.contains(resource.extension))
-  && !(principal is KeycloakMCP::User)
-  && principal.admin
-};
-
 @id("kc-write-set-user-locale")
 permit(
   principal,
@@ -288,42 +91,6 @@ when {
   && principal in context.resource.realm
   && (resource.extension == "core" || context.extensions.contains(resource.extension))
   && principal is KeycloakMCP::User && principal.roles.contains("mcp-user-locale")
-  && context.writesEnabled
-  && context.approvalVerified
-  && context.approvalTool == resource.name
-};
-
-@id("kc-write-magic-link-create")
-permit(
-  principal,
-  action == KeycloakMCP::Action::"Write",
-  resource == KeycloakMCP::Tool::"magic_link_create"
-)
-when {
-  context.toolKnown
-  && resource.tier == "write"
-  && principal.scopes.contains(resource.requiredScope)
-  && principal in context.resource.realm
-  && (resource.extension == "core" || context.extensions.contains(resource.extension))
-  && !(principal is KeycloakMCP::User)
-  && context.writesEnabled
-  && context.approvalVerified
-  && context.approvalTool == resource.name
-};
-
-@id("kc-write-config-cli-apply")
-permit(
-  principal,
-  action == KeycloakMCP::Action::"Write",
-  resource == KeycloakMCP::Tool::"config_cli_apply"
-)
-when {
-  context.toolKnown
-  && resource.tier == "write"
-  && principal.scopes.contains(resource.requiredScope)
-  && principal in context.resource.realm
-  && (resource.extension == "core" || context.extensions.contains(resource.extension))
-  && !(principal is KeycloakMCP::User)
   && context.writesEnabled
   && context.approvalVerified
   && context.approvalTool == resource.name
@@ -356,12 +123,4 @@ forbid(principal, action, resource)
 when {
   action == KeycloakMCP::Action::"Write" &&
   (!context.approvalVerified || context.approvalTool != resource.name)
-};
-
-@id("kc-deny-config-apply-without-admin")
-forbid(principal, action, resource)
-when {
-  action == KeycloakMCP::Action::"Write" &&
-  resource.extension == "config-cli" &&
-  !principal.admin
 };

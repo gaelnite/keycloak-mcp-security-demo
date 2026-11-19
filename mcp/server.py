@@ -19,8 +19,6 @@ import asyncio
 import json
 import logging
 import os
-import shlex
-import subprocess
 import sys
 import time
 from contextvars import ContextVar
@@ -43,9 +41,6 @@ from approval import (
     ApprovalError,
     ApprovalVerifier,
     SqliteJtiStore,
-    current_approval_token,
-    reset_approval_token,
-    set_approval_token,
 )
 from auth import (
     KeycloakAuthConfig,
@@ -57,7 +52,7 @@ from auth import (
 )
 from delegation import DelegatedAdmin, DelegationConfig, DelegationError, gateway_capability
 from pep import CedarPep, PepError, UserPrincipal, pep_from_env
-from tool_registry import ADMIN, LOCALE_FIXTURE_ID, LOCALES, TOOLS, ToolSpec
+from tool_registry import LOCALE_FIXTURE_ID, LOCALES, TOOLS, ToolSpec
 
 HERE = Path(__file__).resolve().parent
 DEFAULT_PORT = 8766
@@ -70,7 +65,6 @@ ADMIN_CHECK_PATH = "/__delegated_admin_check"
 class HttpCaller:
     claims: TokenClaims
     token: str = field(repr=False)
-    approval: str | None = field(repr=False)
     required_scopes: tuple[str, ...] = ()
 
 
@@ -150,15 +144,8 @@ class ServerConfig:
     base_url: str
     extensions: frozenset[str]
     writes_enabled: bool
-    admin_tools_enabled: bool
     audit_log: str | None
     client_entity_map: Mapping[str, str]
-    metrics_url: str
-    health_url: str
-    magic_link_path: str | None
-    config_cli_cmd: tuple[str, ...]
-    kcwarden_cmd: tuple[str, ...]
-    config_cli_apply: bool
     approval: ApprovalVerifier | None
     tool_allowlist: frozenset[str] | None = None
     delegation: DelegationConfig | None = None
@@ -209,15 +196,8 @@ class ServerConfig:
             base_url=base_url,
             extensions=extensions,
             writes_enabled=writes_enabled,
-            admin_tools_enabled=_truthy(values.get("KC_MCP_ENABLE_ADMIN_TOOLS")),
             audit_log=(values.get("KC_MCP_AUDIT_LOG") or "").strip() or None,
             client_entity_map=entity_map,
-            metrics_url=(values.get("KC_METRICS_URL") or f"{base_url}/metrics").strip(),
-            health_url=(values.get("KC_HEALTH_URL") or f"{base_url}/health").strip(),
-            magic_link_path=(values.get("KC_MAGIC_LINK_PATH") or "").strip() or None,
-            config_cli_cmd=tuple(shlex.split(values.get("KC_CONFIG_CLI_CMD") or "")),
-            kcwarden_cmd=tuple(shlex.split(values.get("KC_KCWARDEN_CMD") or "")),
-            config_cli_apply=_truthy(values.get("KC_CONFIG_CLI_APPLY")),
             approval=approval,
             tool_allowlist=tool_allowlist,
             delegation=delegation,
@@ -236,11 +216,8 @@ class ServerConfig:
             "extensions": sorted(self.extensions),
             "writes_enabled": self.writes_enabled,
             "delegation_configured": self.delegation is not None,
-            "admin_tools_enabled": self.admin_tools_enabled,
             "approval_configured": self.approval is not None,
             "audit_log": self.audit_log,
-            "config_cli_configured": bool(self.config_cli_cmd),
-            "kcwarden_configured": bool(self.kcwarden_cmd),
         }
 
 
@@ -347,17 +324,6 @@ class KeycloakAdmin:
             raise RuntimeError(f"Keycloak Admin API returned HTTP {response.status_code}")
         return response.json()
 
-    async def post(self, path: str, payload: Mapping[str, Any]) -> Any:
-        client = await self._http()
-        response = await client.post(
-            path,
-            json=dict(payload),
-            headers={"Authorization": f"Bearer {current_token()}", "Accept": "application/json"},
-        )
-        if response.status_code >= 400:
-            raise RuntimeError(f"Keycloak Admin API returned HTTP {response.status_code}")
-        return response.json() if response.content else {}
-
     async def aclose(self) -> None:
         if self._client is not None:
             await self._client.aclose()
@@ -370,14 +336,6 @@ def _capped(items: Any) -> Any:
 # ---------------------------------------------------------------------------
 # tool implementations
 # ---------------------------------------------------------------------------
-async def list_realms(admin: KeycloakAdmin, **_: Any) -> Any:
-    return _capped(await admin.get("/admin/realms"))
-
-
-async def get_realm(admin: KeycloakAdmin, realm: str, **_: Any) -> Any:
-    return await admin.get(f"/admin/realms/{path_segment(realm, field='realm')}")
-
-
 async def list_clients(admin: KeycloakAdmin, realm: str, search: str = "", **_: Any) -> Any:
     params: dict[str, Any] = {"max": MAX_TOOL_ROWS, "first": 0}
     if search:
@@ -410,48 +368,6 @@ async def get_user(admin: KeycloakAdmin, realm: str, user_id: str, **_: Any) -> 
     )
 
 
-async def list_groups(admin: KeycloakAdmin, realm: str, **_: Any) -> Any:
-    return _capped(await admin.get(f"/admin/realms/{path_segment(realm, field='realm')}/groups", params={"max": MAX_TOOL_ROWS}))
-
-
-async def list_roles(admin: KeycloakAdmin, realm: str, **_: Any) -> Any:
-    return _capped(await admin.get(f"/admin/realms/{path_segment(realm, field='realm')}/roles", params={"max": MAX_TOOL_ROWS}))
-
-
-async def list_events(admin: KeycloakAdmin, realm: str, event_type: str = "", **_: Any) -> Any:
-    params: dict[str, Any] = {"max": MAX_TOOL_ROWS}
-    if event_type:
-        params["type"] = event_type
-    return _capped(await admin.get(f"/admin/realms/{path_segment(realm, field='realm')}/events", params=params))
-
-
-async def list_admin_events(admin: KeycloakAdmin, realm: str, operation: str = "", **_: Any) -> Any:
-    params: dict[str, Any] = {"max": MAX_TOOL_ROWS}
-    if operation:
-        params["operation"] = operation
-    return _capped(await admin.get(f"/admin/realms/{path_segment(realm, field='realm')}/admin-events", params=params))
-
-
-async def metrics_health_summary(admin: KeycloakAdmin, config: ServerConfig, **_: Any) -> Any:
-    client = await admin._http()
-    summary: dict[str, Any] = {}
-    try:
-        metrics = await client.get(config.metrics_url)
-        summary["metrics"] = {
-            "status": metrics.status_code,
-            "lines": len(metrics.text.splitlines()) if metrics.status_code == 200 else 0,
-            "bytes": len(metrics.content),
-        }
-    except httpx.HTTPError as exc:
-        summary["metrics"] = {"error": exc.__class__.__name__}
-    try:
-        health = await client.get(config.health_url)
-        summary["health"] = {"status": health.status_code, "body": health.text[:200]}
-    except httpx.HTTPError as exc:
-        summary["health"] = {"error": exc.__class__.__name__}
-    return summary
-
-
 async def get_extension_inventory(config: ServerConfig, **_: Any) -> Any:
     return {
         "installed": sorted(config.extensions),
@@ -462,117 +378,12 @@ async def get_extension_inventory(config: ServerConfig, **_: Any) -> Any:
     }
 
 
-async def list_organizations(admin: KeycloakAdmin, realm: str, **_: Any) -> Any:
-    return _capped(
-        await admin.get(f"/admin/realms/{path_segment(realm, field='realm')}/organizations", params={"max": MAX_TOOL_ROWS})
-    )
-
-
-async def get_organization(admin: KeycloakAdmin, realm: str, org_id: str, **_: Any) -> Any:
-    return await admin.get(
-        f"/admin/realms/{path_segment(realm, field='realm')}/organizations/{path_segment(org_id, field='org_id')}"
-    )
-
-
-async def get_home_idp_config(admin: KeycloakAdmin, realm: str, **_: Any) -> Any:
-    document = await admin.get(f"/admin/realms/{path_segment(realm, field='realm')}")
-    attributes = document.get("attributes") if isinstance(document, dict) else {}
-    attributes = attributes if isinstance(attributes, dict) else {}
-    return {
-        "realm": realm,
-        "homeIdpKeys": {
-            key: value
-            for key, value in attributes.items()
-            if "home" in key.lower() or "idp" in key.lower()
-        },
-    }
-
-
-async def inspect_restrict_client_auth_flow(admin: KeycloakAdmin, realm: str, **_: Any) -> Any:
-    flows = await admin.get(f"/admin/realms/{path_segment(realm, field='realm')}/authentication/flows")
-    matches = [
-        {
-            "alias": flow.get("alias"),
-            "providerId": flow.get("providerId"),
-            "builtIn": flow.get("builtIn"),
-            "topLevel": flow.get("topLevel"),
-        }
-        for flow in flows or []
-        if isinstance(flow, dict) and "restrict" in str(flow.get("alias") or "").lower()
-    ]
-    return {"matches": matches, "count": len(matches)}
-
-
-def _run(argv: Sequence[str], *, timeout: float = 30.0) -> dict[str, Any]:
-    if not argv:
-        raise ConfigError("this tool needs a configured command (see docs/MCP-SERVER.md)")
-    try:
-        completed = subprocess.run(
-            list(argv), capture_output=True, text=True, timeout=timeout, check=False, shell=False
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        raise RuntimeError(f"command failed to run: {exc.__class__.__name__}") from exc
-    return {
-        "returncode": completed.returncode,
-        "stdout": completed.stdout[-4000:],
-        "stderr": completed.stderr[-1000:],
-    }
-
-
-async def config_cli_diff(config: ServerConfig, **_: Any) -> Any:
-    return _run(config.config_cli_cmd + ("--dry-run",), timeout=60.0)
-
-
-async def config_cli_apply(config: ServerConfig, **_: Any) -> Any:
-    if not config.config_cli_apply:
-        raise ConfigError("KC_CONFIG_CLI_APPLY=1 is required before config_cli_apply can run")
-    return _run(config.config_cli_cmd, timeout=120.0)
-
-
-async def kcwarden_audit(config: ServerConfig, **_: Any) -> Any:
-    return _run(config.kcwarden_cmd, timeout=120.0)
-
-
-async def magic_link_create(
-    admin: KeycloakAdmin,
-    config: ServerConfig,
-    realm: str,
-    user_id: str,
-    ttl_seconds: int = 300,
-    **_: Any,
-) -> Any:
-    if not config.magic_link_path:
-        raise ConfigError(
-            "KC_MAGIC_LINK_PATH is not configured; set it to the extension's admin path, "
-            "for example /admin/realms/{realm}/magic-link"
-        )
-    return await admin.post(
-        config.magic_link_path.format(realm=path_segment(realm, field="realm")),
-        {"userId": user_id, "ttlSeconds": int(ttl_seconds)},
-    )
-
-
 TOOL_IMPLS: dict[str, Callable[..., Awaitable[Any]]] = {
-    "list_realms": list_realms,
-    "get_realm": get_realm,
     "list_clients": list_clients,
     "get_client": get_client,
     "list_users": list_users,
     "get_user": get_user,
-    "list_groups": list_groups,
-    "list_roles": list_roles,
-    "list_events": list_events,
-    "list_admin_events": list_admin_events,
-    "metrics_health_summary": metrics_health_summary,
     "get_extension_inventory": get_extension_inventory,
-    "list_organizations": list_organizations,
-    "get_organization": get_organization,
-    "get_home_idp_config": get_home_idp_config,
-    "inspect_restrict_client_auth_flow": inspect_restrict_client_auth_flow,
-    "config_cli_diff": config_cli_diff,
-    "kcwarden_audit": kcwarden_audit,
-    "magic_link_create": magic_link_create,
-    "config_cli_apply": config_cli_apply,
 }
 
 
@@ -614,11 +425,6 @@ def _delegated_approval(runtime: Runtime, user: UserPrincipal, spec: ToolSpec, a
 async def _authorized_call(spec: ToolSpec, **kwargs: Any) -> Any:
     runtime = _runtime()
     claims = current_claims()
-    if spec.tier == ADMIN and not claims.admin:
-        return _error(
-            "admin-tier tools require the mcp-admin realm role in the access token",
-            policy_id=spec.policy_id,
-        )
     user = None
     if claims.interactive:
         user = UserPrincipal(claims.issuer, claims.subject, claims.client_id, claims.realm, claims.scopes, claims.roles)
@@ -635,9 +441,8 @@ async def _authorized_call(spec: ToolSpec, **kwargs: Any) -> Any:
     # URL are the same single segment (check-then-use parity).
     try:
         path_segment(realm, field="realm")
-        for optional_field in ("user_id", "org_id"):
-            if kwargs.get(optional_field) is not None:
-                path_segment(kwargs[optional_field], field=optional_field)
+        if kwargs.get("user_id") is not None:
+            path_segment(kwargs["user_id"], field="user_id")
     except ValidationError as exc:
         return _error(str(exc), policy_id=spec.policy_id)
 
@@ -661,34 +466,12 @@ async def _authorized_call(spec: ToolSpec, **kwargs: Any) -> Any:
             policy_id=spec.policy_id,
         )
     approval = None
-    if spec.write and user is not None:
+    if spec.write:
+        if user is None:
+            return _error("Writes require an interactive user", policy_id=spec.policy_id)
         denied, approval = _delegated_approval(runtime, user, spec, kwargs)
         if denied is not None:
             return denied
-    elif spec.write:
-        verifier = runtime.config.approval
-        if verifier is None:
-            return _error("writes are disabled or no approval key is configured", policy_id=spec.policy_id)
-        token = current_approval_token() or os.environ.get("KC_MCP_APPROVAL")
-        if not token:
-            detail = "this write requires an X-MCP-Approval token bound to the tool and target"
-            runtime.pep.audit_rejection(
-                spec, principal_type, principal_id, realm,
-                reason="approval_missing", detail=detail,
-            )
-            return _error(detail, policy_id=spec.policy_id)
-        # SEC-04: the approval target is always concrete — the user id for
-        # user-scoped writes, else the realm being changed. Never "*".
-        target = str(kwargs.get("user_id") or kwargs.get("realm") or claims.realm)
-        try:
-            facts = verifier.verify(token, tool=spec.name, action=spec.tier, target=target)
-        except ApprovalError as exc:
-            runtime.pep.audit_rejection(
-                spec, principal_type, principal_id, realm,
-                reason="approval_rejected", detail=str(exc), approval_jti=exc.jti,
-            )
-            return _error(str(exc), policy_id=spec.policy_id)
-        approval = facts.to_pep()
     decision = runtime.pep.authorize(
         spec,
         principal_type=principal_type,
@@ -729,14 +512,6 @@ async def _authorized_call(spec: ToolSpec, **kwargs: Any) -> Any:
 
 
 # -- explicit MCP tool signatures (FastMCP builds each input schema from these) --
-async def tool_list_realms() -> Any:
-    return await _authorized_call(SPECS["list_realms"])
-
-
-async def tool_get_realm(realm: str) -> Any:
-    return await _authorized_call(SPECS["get_realm"], realm=realm)
-
-
 async def tool_list_clients(realm: str, search: str = "") -> Any:
     return await _authorized_call(SPECS["list_clients"], realm=realm, search=search)
 
@@ -753,52 +528,8 @@ async def tool_get_user(realm: str, user_id: str) -> Any:
     return await _authorized_call(SPECS["get_user"], realm=realm, user_id=user_id)
 
 
-async def tool_list_groups(realm: str) -> Any:
-    return await _authorized_call(SPECS["list_groups"], realm=realm)
-
-
-async def tool_list_roles(realm: str) -> Any:
-    return await _authorized_call(SPECS["list_roles"], realm=realm)
-
-
-async def tool_list_events(realm: str, event_type: str = "") -> Any:
-    return await _authorized_call(SPECS["list_events"], realm=realm, event_type=event_type)
-
-
-async def tool_list_admin_events(realm: str, operation: str = "") -> Any:
-    return await _authorized_call(SPECS["list_admin_events"], realm=realm, operation=operation)
-
-
-async def tool_metrics_health_summary() -> Any:
-    return await _authorized_call(SPECS["metrics_health_summary"])
-
-
 async def tool_get_extension_inventory() -> Any:
     return await _authorized_call(SPECS["get_extension_inventory"])
-
-
-async def tool_list_organizations(realm: str) -> Any:
-    return await _authorized_call(SPECS["list_organizations"], realm=realm)
-
-
-async def tool_get_organization(realm: str, org_id: str) -> Any:
-    return await _authorized_call(SPECS["get_organization"], realm=realm, org_id=org_id)
-
-
-async def tool_get_home_idp_config(realm: str) -> Any:
-    return await _authorized_call(SPECS["get_home_idp_config"], realm=realm)
-
-
-async def tool_inspect_restrict_client_auth_flow(realm: str) -> Any:
-    return await _authorized_call(SPECS["inspect_restrict_client_auth_flow"], realm=realm)
-
-
-async def tool_config_cli_diff() -> Any:
-    return await _authorized_call(SPECS["config_cli_diff"])
-
-
-async def tool_kcwarden_audit() -> Any:
-    return await _authorized_call(SPECS["kcwarden_audit"])
 
 
 async def tool_set_user_locale(realm: str, user_id: str, locale: str, approval: str = "") -> Any:
@@ -808,39 +539,14 @@ async def tool_set_user_locale(realm: str, user_id: str, locale: str, approval: 
     return await _authorized_call(spec, realm=realm, user_id=user_id, locale=locale, approval=approval)
 
 
-async def tool_magic_link_create(realm: str, user_id: str, ttl_seconds: int = 300) -> Any:
-    return await _authorized_call(
-        SPECS["magic_link_create"], realm=realm, user_id=user_id, ttl_seconds=ttl_seconds
-    )
-
-
-async def tool_config_cli_apply() -> Any:
-    return await _authorized_call(SPECS["config_cli_apply"])
-
-
 SPECS = {tool.name: tool for tool in TOOLS}
 TOOL_FUNCTIONS: dict[str, Callable[..., Awaitable[Any]]] = {
-    "list_realms": tool_list_realms,
-    "get_realm": tool_get_realm,
     "list_clients": tool_list_clients,
     "get_client": tool_get_client,
     "list_users": tool_list_users,
     "get_user": tool_get_user,
-    "list_groups": tool_list_groups,
-    "list_roles": tool_list_roles,
-    "list_events": tool_list_events,
-    "list_admin_events": tool_list_admin_events,
-    "metrics_health_summary": tool_metrics_health_summary,
     "get_extension_inventory": tool_get_extension_inventory,
-    "list_organizations": tool_list_organizations,
-    "get_organization": tool_get_organization,
-    "get_home_idp_config": tool_get_home_idp_config,
-    "inspect_restrict_client_auth_flow": tool_inspect_restrict_client_auth_flow,
-    "config_cli_diff": tool_config_cli_diff,
-    "kcwarden_audit": tool_kcwarden_audit,
     "set_user_locale": tool_set_user_locale,
-    "magic_link_create": tool_magic_link_create,
-    "config_cli_apply": tool_config_cli_apply,
 }
 
 
@@ -852,8 +558,6 @@ def _register_tools(mcp: FastMCP, config: ServerConfig) -> list[str]:
         if config.tool_allowlist is not None and spec.name not in config.tool_allowlist:
             continue
         if spec.write and not config.writes_enabled:
-            continue
-        if spec.tier == ADMIN and not config.admin_tools_enabled:
             continue
         if spec.extension != "core" and spec.extension not in config.extensions:
             continue
@@ -887,11 +591,9 @@ class KeycloakMCP(FastMCP):
         # session. Bind credentials from the SDK's current request metadata.
         caller = request.state.keycloak_caller
         http_caller = _HTTP_CALLER.set(caller)
-        approval_token = set_approval_token(caller.approval)
         try:
             return await super().call_tool(name, arguments)
         finally:
-            reset_approval_token(approval_token)
             _HTTP_CALLER.reset(http_caller)
 
 
@@ -914,12 +616,9 @@ class KeycloakAuthMiddleware:
             await self.app(scope, receive, send)
             return
         header = None
-        approval = None
         for name, value in scope.get("headers") or ():
             if name.lower() == b"authorization":
                 header = value.decode("latin-1")
-            elif name.lower() == b"x-mcp-approval":
-                approval = value.decode("latin-1")
         try:
             token = bearer_from_header(header)
             claims = await self.verifier.verify(token)
@@ -941,7 +640,7 @@ class KeycloakAuthMiddleware:
             )
             await response(scope, receive, send)
             return
-        caller = HttpCaller(claims, token, approval)
+        caller = HttpCaller(claims, token)
         scope.setdefault("state", {})["keycloak_caller"] = caller
         scope["auth"] = AuthCredentials(scopes=sorted(claims.scopes))
         scope["user"] = AuthenticatedUser(

@@ -55,11 +55,10 @@ tokens, arguments or approval artifacts.
 
 ## Write and downstream boundaries
 
-`KC_MCP_ENABLE_WRITES` defaults to `0`; enabling it requires an Ed25519 approval
-public key. General write tools require approval bound to the tool and a concrete
-target. The delegated locale write additionally binds approval to the user,
-realm, fixture and locale, and requires durable replay tracking. Its target and
-locale are fixed by the demo source. The approval signer is isolated from MCP.
+Writes default to disabled. The delegated locale write requires an Ed25519
+approval public key and durable replay tracking. Each approval binds the user,
+realm, tool, fixture, and selected locale. The demo fixes the target and the
+set of supported locales. The approval signer is isolated from MCP.
 
 The delegated profile exchanges the human's access token for a short-lived
 capability token, then sends it only to a private Admin gateway. MCP validates

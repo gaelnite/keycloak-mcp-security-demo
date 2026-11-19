@@ -17,16 +17,7 @@ ADMIN = "admin"
 TIERS = (READ, WRITE, ADMIN)
 
 # Extension names are the inventory keys used by the server and by Cedar entities.
-EXTENSIONS = (
-    "core",
-    "metrics",
-    "orgs",
-    "magic-link",
-    "home-idp",
-    "restrict-client-auth",
-    "config-cli",
-    "kcwarden",
-)
+EXTENSIONS = ("core",)
 
 
 @dataclass(frozen=True)
@@ -92,96 +83,17 @@ def _spec(
 
 
 TOOLS: tuple[ToolSpec, ...] = (
-    # -- realm / client / user / group / role reads -----------------------------
-    _spec("list_realms", "List Keycloak realms visible to the caller.", "keycloak.realms.read", READ),
-    _spec("get_realm", "Read one realm's settings.", "keycloak.realms.read", READ),
     _spec("list_clients", "List OIDC/SAML clients in a realm.", CLIENTS_READ, READ),
     _spec("get_client", "Read one client's configuration.", CLIENTS_READ, READ),
     _spec("list_users", "Search users in a realm.", USERS_READ, READ),
     _spec("get_user", "Read one user's profile and role mappings.", USERS_READ, READ),
-    _spec("list_groups", "List groups in a realm.", "keycloak.groups.read", READ),
-    _spec("list_roles", "List realm and client roles.", "keycloak.roles.read", READ),
-    # -- events and observability ----------------------------------------------
-    _spec("list_events", "Read recent user events from a realm.", "keycloak.events.read", READ),
-    _spec(
-        "list_admin_events",
-        "Read recent admin events from a realm.",
-        "keycloak.events.admin.read",
-        READ,
-    ),
-    _spec(
-        "metrics_health_summary",
-        "Summarize Keycloak metrics and health endpoints.",
-        "keycloak.metrics.read",
-        READ,
-        extension="metrics",
-    ),
-    # -- extension-aware reads --------------------------------------------------
     _spec(
         "get_extension_inventory",
         "List installed Keycloak extensions and the tools mapped to each.",
         "keycloak.extensions.read",
         READ,
     ),
-    _spec(
-        "list_organizations",
-        "List organizations (Organizations extension).",
-        "keycloak.orgs.read",
-        READ,
-        extension="orgs",
-    ),
-    _spec(
-        "get_organization",
-        "Read one organization (Organizations extension).",
-        "keycloak.orgs.read",
-        READ,
-        extension="orgs",
-    ),
-    _spec(
-        "get_home_idp_config",
-        "Read home-IdP discovery configuration for a realm.",
-        "keycloak.realms.read",
-        READ,
-        extension="home-idp",
-    ),
-    _spec(
-        "inspect_restrict_client_auth_flow",
-        "Inspect the restrict-client-auth authentication flow bindings.",
-        "keycloak.clients.read",
-        READ,
-        extension="restrict-client-auth",
-    ),
-    # -- admin (read-only but privileged) --------------------------------------
-    _spec(
-        "config_cli_diff",
-        "Diff desired config-cli state against the live realm (read-only).",
-        "keycloak.config.read",
-        ADMIN,
-        extension="config-cli",
-    ),
-    _spec(
-        "kcwarden_audit",
-        "Run a read-only kcwarden audit and return findings.",
-        "keycloak.audit.read",
-        ADMIN,
-        extension="kcwarden",
-    ),
-    # -- writes (registered only when KC_MCP_ENABLE_WRITES=1) -------------------
     _spec("set_user_locale", "Set a user's preferred locale.", USER_LOCALE, WRITE),
-    _spec(
-        "magic_link_create",
-        "Create a magic-link action token for a user (extension).",
-        "keycloak.users.manage",
-        WRITE,
-        extension="magic-link",
-    ),
-    _spec(
-        "config_cli_apply",
-        "Apply config-cli desired state to a realm (gated write).",
-        "keycloak.config.apply",
-        WRITE,
-        extension="config-cli",
-    ),
 )
 
 TOOLS_BY_NAME = {tool.name: tool for tool in TOOLS}

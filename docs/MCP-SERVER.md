@@ -51,10 +51,9 @@ KC_MCP_ACCESS_TOKEN_FILE=/secure/path/access-token \
 | `KC_JWKS_URL` | Issuer cert endpoint | HTTPS JWKS; no redirects and a bounded response. |
 | `KC_MCP_INTERACTIVE_CLIENT_IDS` | Unset | Allowlisted user clients that use verified entitlements and per-subject principals. Requires the canonical resource URL. |
 | `KC_MCP_CLIENT_ENTITY_MAP` | `{}` | Optional JSON map from client ID to Cedar entity ID. A nonempty map makes unmapped clients fail closed. |
-| `KC_EXTENSIONS` | `core` | Installed extension names; extension tools stay unavailable unless enabled. |
+| `KC_EXTENSIONS` | `core` | Inventory labels. The six maintained tools are all core tools. |
 | `KC_MCP_TOOL_ALLOWLIST` | Unset | Optional tool-name allowlist; an empty value registers no tools. |
 | `KC_MCP_ENABLE_WRITES` | `0` | Write tools stay disabled. Enabling requires an approval public key. |
-| `KC_MCP_ENABLE_ADMIN_TOOLS` | `0` | Privileged read-only `config_cli_diff` and `kcwarden_audit` stay disabled. |
 | `KC_MCP_APPROVAL_PUBLIC_KEY_FILE` | Unset | Ed25519 public key for operation-bound approval. The private signing key belongs outside MCP. |
 | `KC_MCP_AUDIT_LOG` | Unset | Optional redacted JSONL decision log, created with mode `0600`. |
 | `KC_CEDAR_TIMEOUT_MS` | `500` (range 500–2,000) | PDP deadline; timeout or PDP error denies. |
@@ -66,10 +65,10 @@ approval. Never expose the private Admin gateway through the public edge.
 
 ## Tool and policy source
 
-[`mcp/tool_registry.py`](../mcp/tool_registry.py) defines 21 tool records with
-scope, tier, extension and Cedar policy ID. The registered surface is further
-limited by the deployment allowlist, enabled extensions, disabled-by-default
-admin/write gates, interactive entitlements and selected scope. The normal
+[`mcp/tool_registry.py`](../mcp/tool_registry.py) defines six tool records with
+scope, tier, extension and Cedar policy ID. Registration respects the deployment
+allowlist and write setting. Interactive entitlement and scope restrict discovery
+and are checked again on each call. The normal
 headless Docker profile exposes only `get_extension_inventory`.
 
 | Source | Responsibility |

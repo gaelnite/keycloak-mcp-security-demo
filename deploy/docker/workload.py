@@ -79,12 +79,16 @@ def verify(*, expiry_check=False):
         headers["MCP-Protocol-Version"] = initialized.json()["result"]["protocolVersion"]
         assert rpc(http, resource, headers, "notifications/initialized").status_code == 202
 
+        discovery_result = rpc(http, resource, headers, "tools/list", request_id=2)
+        discovery_result.raise_for_status()
+        assert [tool["name"] for tool in discovery_result.json()["result"]["tools"]] == ["get_extension_inventory"]
+
         params = {"name": "get_extension_inventory", "arguments": {}}
-        allowed = rpc(http, resource, headers, "tools/call", params=params, request_id=2)
+        allowed = rpc(http, resource, headers, "tools/call", params=params, request_id=3)
         allowed.raise_for_status()
         assert "core" in json.dumps(allowed.json()["result"])
         headers["Authorization"] = "Bearer " + access_token(http, issuer)
-        denied = rpc(http, resource, headers, "tools/call", params=params, request_id=3)
+        denied = rpc(http, resource, headers, "tools/call", params=params, request_id=4)
         assert denied.status_code == 403
         assert f'scope="{SCOPE}"' in denied.headers["WWW-Authenticate"]
         wrong_audience = fetch_assertion(issuer + "/unused")

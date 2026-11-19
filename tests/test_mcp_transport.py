@@ -31,13 +31,11 @@ METADATA = "https://mcp.example:9443/.well-known/oauth-protected-resource/admin/
 CLIENT_ID = "desktop"
 PROTOCOL = "2025-11-25"
 USER_SCOPE = "keycloak.users.read"
-GROUP_SCOPE = "keycloak.groups.read"
+CLIENT_SCOPE = "keycloak.clients.read"
 OPTIONS = {
     "KC_ISSUER": ISSUER,
     "KC_URL": "https://kc.example:8443",
     "KC_ALLOWED_CLIENT_IDS": CLIENT_ID,
-    "KC_EXTENSIONS": "config-cli",
-    "KC_MCP_ENABLE_ADMIN_TOOLS": "1",
 }
 
 
@@ -189,8 +187,8 @@ class McpTransportTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_same_session_uses_current_grants_and_only_challenges_for_this_tool(self):
         async with self.running():
-            await self.initialize(self.token(f"{USER_SCOPE} {GROUP_SCOPE}"))
-            denied = await self.call(self.token(GROUP_SCOPE))
+            await self.initialize(self.token(f"{USER_SCOPE} {CLIENT_SCOPE}"))
+            denied = await self.call(self.token(CLIENT_SCOPE))
             self.assertEqual(denied.status_code, 403, denied.text)
             self.assertEqual(
                 denied.headers["WWW-Authenticate"],
@@ -225,7 +223,7 @@ class McpTransportTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(self.pep.calls, [])
             self.assertEqual(self.admin_requests, [])
 
-    async def test_protocol_role_policy_and_unknown_tool_responses_do_not_request_scopes(self):
+    async def test_policy_unknown_tool_and_invalid_arguments_do_not_request_scopes(self):
         async with self.running():
             token = self.token(USER_SCOPE)
             await self.initialize(token)
@@ -240,8 +238,10 @@ class McpTransportTests(unittest.IsolatedAsyncioTestCase):
                 self.assertNotIn("WWW-Authenticate", response.headers)
                 self.assertEqual(response.json()["id"], 3)
             self.assertIn("Cedar denied", responses[0].text)
-            self.assertIn("mcp-admin", responses[1].text)
+            self.assertTrue(responses[1].json()["result"]["isError"])
+            self.assertIn("Unknown tool: config_cli_diff", responses[1].text)
             self.assertTrue(responses[2].json()["result"]["isError"])
+            self.assertIn("Unknown tool: config_cli_apply", responses[2].text)
             self.assertTrue(responses[3].json()["result"]["isError"])
             invalid_version = await self.request(
                 "tools/call", self.token(), params={"name": "list_users"},

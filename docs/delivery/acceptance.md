@@ -6,13 +6,11 @@
 |---|---|
 | `unit-tests` | Python unit suite, including Cedar evaluations |
 | `cedar-policy` | Real Cedar bundle validation and generated policy/registry consistency |
-| `terraform` | `terraform fmt -check` and `terraform validate`; no live apply |
-| `ansible-syntax` | Syntax checks for the retained Linux site and teardown playbooks |
 | Docker headless | Compose validation/build, startup, TLS, SPIRE issuance/expiry, Cedar permit, scope denial |
 | Docker interactive | Fixture login cases, role-scoped grants, token refresh, Cedar and disabled Admin dispatch |
 | Docker delegated | Capability exchange, SVID and route denials, Admin projections, fixture write, approval replay after restart |
 
-The [Docker workflow](../../.github/workflows/docker-demo.yml) defines the paths that trigger live checks.
+The [Docker workflow](../../.github/workflows/docker-demo.yml) runs the live checks on every pull request to `main`.
 The [CI workflow](../../.github/workflows/ci.yml) runs the unit and configuration checks.
 
 ## Coverage limits
@@ -24,8 +22,6 @@ The [CI workflow](../../.github/workflows/ci.yml) runs the unit and configuratio
   [MCP-DELEGATION.md](../MCP-DELEGATION.md); it is not the same as hosted desktop-client CI.
 - CI does not rehearse full volume recovery or continuous SPIRE signing-key rollover. The Docker runbook
   records these limits in [DOCKER.md](../DOCKER.md).
-- Terraform and Ansible CI are static validation only. They do not verify the legacy script-SVID fixture
-  against a running Keycloak instance.
 
 The version-specific Keycloak token and Admin REST experiment is recorded in
 [keycloak-26.8.2.md](keycloak-26.8.2.md); it is evidence from a separate isolated experiment, not a

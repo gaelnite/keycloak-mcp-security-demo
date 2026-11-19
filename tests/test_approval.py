@@ -38,8 +38,8 @@ except ImportError:  # pragma: no cover - depends on the interpreter
 if HAVE_CRYPTO:
     from approval import ApprovalError, ApprovalVerifier, JtiStore, SqliteJtiStore
 
-from pep import CedarPep, Decision
-from tool_registry import TOOLS_BY_NAME
+from pep import CedarPep, Decision, UserPrincipal
+from tool_registry import LOCALE_FIXTURE_ID, TOOLS_BY_NAME, USER_LOCALE
 
 try:
     # The lab directory itself is named mcp; probe a real SDK submodule.
@@ -53,9 +53,9 @@ if HAVE_MCP:
 
 ISS = "keycloak-mcp-approval"
 AUD = "keycloak-mcp"
-TOOL = "magic_link_create"
+TOOL = "set_user_locale"
 ACTION = "write"
-TARGET = "alice-user-id"
+TARGET = LOCALE_FIXTURE_ID
 
 
 def _real_now() -> int:
@@ -81,12 +81,12 @@ def _keypair():
 
 
 def _token(private, *, jti="jti-1", target=TARGET, tool=TOOL, action=ACTION,
-           iat=None, exp=None, iss=ISS, aud=AUD):
+           iat=None, exp=None, iss=ISS, aud=AUD, **binding):
     iat = _real_now() if iat is None else iat
     exp = iat + 300 if exp is None else exp
     return jwt.encode(
         {"iss": iss, "aud": aud, "sub": "fixture-operator", "jti": jti, "iat": iat, "exp": exp,
-         "tool": tool, "action": action, "target": target},
+         "tool": tool, "action": action, "target": target, **binding},
         private, algorithm="EdDSA",
     )
 
@@ -145,12 +145,6 @@ class ApprovalWildcardTests(_VerifierCase):
         with self.assertRaises(ApprovalError) as ctx:
             self.verify(token, target="alice-user-id")
         self.assertIn("wildcard approval rejected", str(ctx.exception))
-
-    def test_wildcard_rejected_for_realm_target(self) -> None:
-        token = _token(self.private, target="*", tool="config_cli_apply")
-        with self.assertRaises(ApprovalError) as ctx:
-            self.verify(token, tool="config_cli_apply", target="lab")
-        self.assertIn("wildcard", str(ctx.exception))
 
     def test_concrete_target_mismatch_is_rejected(self) -> None:
         token = _token(self.private, target="alice")
@@ -310,7 +304,6 @@ class ServerApprovalWiringTests(unittest.TestCase):
                 "KC_AUDIENCE": "https://mcp.lab.local/mcp",
                 "KC_URL": "https://kc.lab.local:8443",
                 "KC_ALLOWED_CLIENT_IDS": "https://cimd.lab.local:8444/client-metadata.json",
-                "KC_EXTENSIONS": "magic-link",
                 "KC_MCP_CLIENT_ENTITY_MAP": json.dumps(
                     {"https://cimd.lab.local:8444/client-metadata.json": "mcp-admin"}
                 ),
@@ -319,30 +312,35 @@ class ServerApprovalWiringTests(unittest.TestCase):
         config = dataclasses.replace(base, approval=verifier, writes_enabled=True)
         self.pep = _RecordingAuditPep()
         server._RUNTIME = server.Runtime(config=config, pep=self.pep, admin=None)
-        server._CLAIMS.set(TokenClaims(
-            subject="fixture-operator",
+        claims = TokenClaims(
+            subject="fixture-requester",
             client_id="https://cimd.lab.local:8444/client-metadata.json",
-            scopes=frozenset({"keycloak.users.manage", "keycloak.config.apply"}),
-            realm="lab", admin=True, expires_at=9_999_999_999,
+            scopes=frozenset({USER_LOCALE.scope}), roles=frozenset({USER_LOCALE.role}),
+            realm="lab", admin=False, expires_at=9_999_999_999, interactive=True,
             issuer=base.auth.issuer, audience=base.auth.audience,
-        ))
+        )
+        server._CLAIMS.set(claims)
+        self.actor = UserPrincipal(
+            claims.issuer, claims.subject, claims.client_id, claims.realm, claims.scopes, claims.roles,
+        ).id
 
     def tearDown(self) -> None:
         server._RUNTIME = self._old_runtime
         server._CLAIMS.set(None)
-        os.environ.pop("KC_MCP_APPROVAL", None)
+
+    def token(self, **overrides):
+        binding = {"sub": self.actor, "realm": "lab", "locale": "de", **overrides}
+        return _token(self.private, **binding)
 
     def call(self, token):
-        handle = server.set_approval_token(token)
-        try:
-            return asyncio.run(
-                server._authorized_call(server.SPECS[TOOL], realm="lab", user_id=TARGET)
+        return asyncio.run(
+            server._authorized_call(
+                server.SPECS[TOOL], realm="lab", user_id=TARGET, locale="de", approval=token
             )
-        finally:
-            server.reset_approval_token(handle)
+        )
 
     def test_replay_denied_and_audited_no_cedar_call(self) -> None:
-        token = _token(self.private)
+        token = self.token()
         first = self.call(token)
         # deny (test PDP), but approval gate PASSED -> authorize was reached
         self.assertIn("Cedar denied", first["error"])
@@ -352,31 +350,17 @@ class ServerApprovalWiringTests(unittest.TestCase):
         self.assertIn("already been used", replay["error"])
         self.assertEqual(len(self.pep.authorizations), 1)  # Cedar not consulted twice
         self.assertEqual(self.pep.rejections[-1]["reason"], "approval_rejected")
-        self.assertEqual(self.pep.rejections[-1]["jti"], "jti-1")
 
     def test_wildcard_denied_and_audited(self) -> None:
-        result = self.call(_token(self.private, target="*"))
+        result = self.call(self.token(target="*"))
         self.assertIn("wildcard approval rejected", result["error"])
         self.assertEqual(len(self.pep.authorizations), 0)
         self.assertEqual(self.pep.rejections[-1]["reason"], "approval_rejected")
 
     def test_missing_token_denied_and_audited(self) -> None:
         result = self.call(None)
-        self.assertIn("X-MCP-Approval", result["error"])
+        self.assertIn("An operator approval is required", result["error"])
         self.assertEqual(self.pep.rejections[-1]["reason"], "approval_missing")
-
-    def test_config_cli_apply_target_is_the_callers_realm(self) -> None:
-        # No user_id/realm kwargs -> concrete target = claims.realm ("lab"), never "*".
-        spec = server.SPECS["config_cli_apply"]
-        token = _token(self.private, tool="config_cli_apply", target="lab")
-        handle = server.set_approval_token(token)
-        try:
-            result = asyncio.run(server._authorized_call(spec))
-        finally:
-            server.reset_approval_token(handle)
-        self.assertIn("Cedar denied", result["error"])  # reached Cedar -> target accepted
-        self.assertEqual(self.pep.rejections, [])
-
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

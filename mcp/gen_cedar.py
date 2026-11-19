@@ -110,14 +110,6 @@ when {
   action == KeycloakMCP::Action::"Write" &&
   (!context.approvalVerified || context.approvalTool != resource.name)
 };
-
-@id("kc-deny-config-apply-without-admin")
-forbid(principal, action, resource)
-when {
-  action == KeycloakMCP::Action::"Write" &&
-  resource.extension == "config-cli" &&
-  !principal.admin
-};
 """
 
 

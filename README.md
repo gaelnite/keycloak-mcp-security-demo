@@ -10,7 +10,7 @@ short-lived credential scoped to the permitted Admin operation.
 
 The Docker demo uses Keycloak 26.8.2 with its **preview SPIFFE feature**. It
 pre-registers the desktop client. Dynamic Client ID Metadata Document (CIMD)
-admission belongs to the separate 26.8.1 lab.
+admission belongs to the archived 26.8.1 lab.
 
 The OAuth SPIFFE and CIMD texts are Internet-Drafts. The example runs on a single
 trusted host with synthetic realm data.
@@ -71,7 +71,7 @@ disabled test account. Each attempt requires a fresh approval from an operator.
 | --- | --- |
 | Attested headless access and a Cedar smoke test | [Headless Docker demo](docs/DOCKER.md) |
 | Role-scoped desktop discovery with Admin dispatch disabled | [Interactive profile](docs/MCP-INTERACTIVE.md) |
-| Script-issued SVIDs, dynamic CIMD and the legacy token-passthrough profile | [Podman deployment](docs/DEPLOYMENT.md) and [26.8.1 results](docs/AUTHN-RESULTS.md) |
+| Script-issued SVIDs, dynamic CIMD and the legacy token-passthrough profile | [Archived Podman deployment](https://github.com/gaelnite/keycloak-mcp-security-demo/blob/archive/legacy-podman-26.8.1/docs/DEPLOYMENT.md) and [26.8.1 results](https://github.com/gaelnite/keycloak-mcp-security-demo/blob/archive/legacy-podman-26.8.1/docs/AUTHN-RESULTS.md) |
 | Local tests, policy validation and contribution process | [Contributing](CONTRIBUTING.md) |
 | Trust assumptions, limitations and vulnerability reporting | [Security model](docs/SECURITY.md) and [security policy](SECURITY.md) |
 
@@ -83,5 +83,5 @@ authorization specification. The recorded SDK session negotiated protocol versio
 
 The Cedar integration draws on the PEP/PDP pattern in
 [openclaw-cedar-policy-demo](https://github.com/windley/openclaw-cedar-policy-demo).
-See the [third-party notices](NOTICE), [extension review](docs/EXTENSIONS.md)
+See the [third-party notices](NOTICE), [historical extension review](https://github.com/gaelnite/keycloak-mcp-security-demo/blob/archive/legacy-podman-26.8.1/docs/EXTENSIONS.md)
 and [Apache 2.0 license](LICENSE).
