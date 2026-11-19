@@ -22,4 +22,5 @@ The delegated Docker profile uses real SPIRE workload attestation, a verified
 user grant, Cedar authorization and a separate Keycloak Admin credential.
 The legacy Podman lab uses script-issued credentials and caller-token passthrough.
 The threat model describes what each profile enforces and where it depends on a
-trusted operator. [Security model and limitations](docs/SECURITY.md)
+trusted operator. [Security model and limitations](docs/SECURITY.md) ·
+[Threat model and verification evidence](docs/THREAT-MODEL.md)
