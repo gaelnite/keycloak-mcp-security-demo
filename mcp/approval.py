@@ -6,17 +6,9 @@ against a public key. The PEP receives only the derived facts
 (`approvalVerified`, `approvalTool`); the token itself never reaches Cedar,
 audit records or logs.
 
-SEC-04 (T16): `jti` is single-use and `target` must be concrete.
-
-- A consumed `jti` is remembered in-process until its `exp` passes, so one
-  approval authorizes exactly one write attempt per verifier process; a replay
-  is denied and audited.
-- `target="*"` is rejected outright. Every write-tier tool is destructive, so
-  an approval must name the exact user id or realm it authorizes.
-
-Legacy transports can supply the approval through their existing header or
-environment. Delegated locale writes bind the actor, realm and locale and use a
-SQLite store that persists across processes.
+Delegated locale approvals bind the actor, realm and locale. The verifier
+consumes the unique approval ID in a durable SQLite store before dispatch.
+Each approval identifies one concrete target and permits one attempt.
 """
 
 from __future__ import annotations
@@ -26,34 +18,17 @@ import sqlite3
 import stat
 import threading
 import time
-from contextvars import ContextVar
 from contextlib import closing
 from dataclasses import dataclass
 from typing import Any, Mapping
 
 import jwt
 
-APPROVAL_HEADER = "x-mcp-approval"
-_APPROVAL_TOKEN: ContextVar[str | None] = ContextVar("kc_mcp_approval_token", default=None)
-
-
 class ApprovalError(Exception):
     def __init__(self, message: str, *, jti: str | None = None) -> None:
         super().__init__(message)
         self.message = message
         self.jti = jti
-
-
-def set_approval_token(token: str | None) -> Any:
-    return _APPROVAL_TOKEN.set(token)
-
-
-def current_approval_token() -> str | None:
-    return _APPROVAL_TOKEN.get()
-
-
-def reset_approval_token(token: Any) -> None:
-    _APPROVAL_TOKEN.reset(token)
 
 
 class JtiStore:
@@ -189,8 +164,7 @@ class ApprovalVerifier:
     ) -> ApprovalFacts:
         if not isinstance(token, str) or len(token) > 4096 or token.count(".") != 2:
             raise ApprovalError(
-                "the X-MCP-Approval header is not a signed approval token; create one with "
-                "the lab's approval CLI"
+                "the approval must be a signed token from the operator"
             )
         try:
             claims = jwt.decode(

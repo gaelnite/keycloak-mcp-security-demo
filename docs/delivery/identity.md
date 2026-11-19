@@ -10,7 +10,7 @@
 
 The Docker client identifier is pre-registered; dynamic CIMD retrieval is not used by these profiles. The
 separate legacy Podman fixture uses a local signing script and is documented in
-[DEPLOYMENT.md](../DEPLOYMENT.md).
+[archived deployment guide](https://github.com/gaelnite/keycloak-mcp-security-demo/blob/archive/legacy-podman-26.8.1/docs/DEPLOYMENT.md).
 
 ## Interactive grants
 

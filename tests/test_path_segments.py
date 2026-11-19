@@ -98,10 +98,8 @@ class ImplInterpolationTests(unittest.TestCase):
 
     def test_no_http_call_for_crafted_values(self):
         cases = [
-            (server.get_realm, {"realm": "master/users/victim"}),
             (server.get_user, {"realm": "lab", "user_id": "123/credentials"}),
             (server.get_user, {"realm": "lab/role-mappings", "user_id": "123"}),
-            (server.get_organization, {"realm": "lab", "org_id": "o/../o2"}),
             (server.list_clients, {"realm": ".."}),
             (server.list_users, {"realm": "lab?x=1"}),
         ]
@@ -153,26 +151,6 @@ class ImplInterpolationTests(unittest.TestCase):
 
         with self.assertRaises(server.ValidationError):
             asyncio.run(server.get_client(admin=_OddAdmin(), realm="lab", client_id="cli"))
-
-    def test_magic_link_crafted_realm_raises_before_post(self):
-        config = server.ServerConfig.from_env(
-            {
-                "KC_ISSUER": "https://kc.lab.local:8443/realms/lab",
-                "KC_AUDIENCE": "https://mcp.lab.local/mcp",
-                "KC_URL": "https://kc.lab.local:8443",
-                "KC_ALLOWED_CLIENT_IDS": "https://cimd.lab.local:8444/client-metadata.json",
-                "KC_MAGIC_LINK_PATH": "/admin/realms/{realm}/magic-link",
-            }
-        )
-        with self.assertRaises(server.ValidationError):
-            asyncio.run(
-                server.magic_link_create(
-                    admin=self.admin, config=config,
-                    realm="lab/../../master/users/victim", user_id="victim",
-                )
-            )
-        self.assertEqual(self.admin.calls, [])
-
 
 @unittest.skipUnless(HAVE_MCP, "the MCP SDK is required for server tests")
 class GateValidationTests(unittest.TestCase):

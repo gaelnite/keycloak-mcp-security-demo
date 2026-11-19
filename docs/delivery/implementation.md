@@ -33,6 +33,5 @@ These files implement the Docker profiles described in the [verification record]
 | Interactive | User/client reads based on role-eligible selected scopes; Cedar evaluates the verified user; Admin calls and writes are disabled |
 | Delegated | Adds per-capability Admin reads and one approved locale update on the fixed disabled fixture |
 
-The legacy Linux automation remains in `ansible/`, `terraform/`, `deploy/units/`, and
-`scripts/mint-svid.py`. It provisions a different Keycloak 26.8.1 setup and uses a local SVID signing key,
-not the Docker/SPIRE workload identity path.
+The [protected archive branch](https://github.com/gaelnite/keycloak-mcp-security-demo/blob/archive/legacy-podman-26.8.1/docs/DEPLOYMENT.md) contains the
+Keycloak 26.8.1 Podman lab and its deployment automation.

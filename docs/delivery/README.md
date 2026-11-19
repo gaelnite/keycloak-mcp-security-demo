@@ -11,7 +11,7 @@ evidence. It replaces the earlier implementation plan.
 | Headless | Keycloak 26.8.2, PostgreSQL 17, SPIRE 1.16, Cedar; one read-only inventory tool | `deploy/docker/compose.yaml`, [DOCKER.md](../DOCKER.md) |
 | Interactive | PKCE login for a pre-registered Codex public client; role-eligible user/client read scopes; Admin dispatch disabled | `compose.interactive.yaml`, [MCP-INTERACTIVE.md](../MCP-INTERACTIVE.md) |
 | Delegated | Per-capability SPIFFE exchange clients, private Admin gateway, and independently approved locale change on a fixed disabled fixture | `compose.delegated.yaml`, [MCP-DELEGATION.md](../MCP-DELEGATION.md) |
-| Legacy Linux | Podman/Ansible/Terraform and script-minted SVID without SPIRE attestation | [AUTOMATION.md](../AUTOMATION.md), [DEPLOYMENT.md](../DEPLOYMENT.md) |
+| Legacy Linux | Podman/Ansible/Terraform and script-minted SVID without SPIRE attestation | [Archived runbook](https://github.com/gaelnite/keycloak-mcp-security-demo/blob/archive/legacy-podman-26.8.1/docs/DEPLOYMENT.md) |
 
 The default desktop demonstration is the delegated profile in the root README. The base Compose file is a
 separate headless smoke profile. Docker's desktop flow pre-registers the client identifier; it does not
@@ -22,8 +22,7 @@ exercise dynamic CIMD retrieval. Keycloak's SPIFFE integration is preview.
 The hosted workflows run these checks:
 
 - [`ci.yml`](../../.github/workflows/ci.yml): unit tests with Cedar
-  evaluations, policy bundle validation and registry generation check, Terraform format/validation, and
-  Ansible syntax checks.
+  evaluations, policy bundle validation, and registry generation check.
 - [`docker-demo.yml`](../../.github/workflows/docker-demo.yml): headless
   TLS/SPIRE/expiry/scope check, interactive role-scoped login and refresh checks, and delegated exchange,
   route-boundary, approval-persistence, and fixture checks.

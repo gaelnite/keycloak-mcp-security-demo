@@ -40,7 +40,10 @@ def _tool(name: str) -> ToolSpec:
 
 class RegistryTests(unittest.TestCase):
     def test_every_tool_declares_scope_policy_tier_extension(self) -> None:
-        self.assertGreaterEqual(len(TOOLS), 20)
+        self.assertEqual(
+            {tool.name for tool in TOOLS},
+            {"get_extension_inventory", "list_users", "get_user", "list_clients", "get_client", "set_user_locale"},
+        )
         names = [tool.name for tool in TOOLS]
         self.assertEqual(len(names), len(set(names)), "duplicate tool name")
         policy_ids = [tool.policy_id for tool in TOOLS]
@@ -55,16 +58,14 @@ class RegistryTests(unittest.TestCase):
 
     def test_write_tools_are_explicitly_registered(self) -> None:
         writes = {tool.name for tool in TOOLS if tool.write}
-        self.assertEqual(writes, {"magic_link_create", "config_cli_apply", "set_user_locale"})
+        self.assertEqual(writes, {"set_user_locale"})
         for name in writes:
             self.assertEqual(_tool(name).tier, WRITE)
 
     def test_extension_filter_keeps_core_tools(self) -> None:
         visible = tool_registry.tools_for_extensions(frozenset({"orgs"}))
         names = {tool.name for tool in visible}
-        self.assertIn("list_realms", names)
-        self.assertIn("list_organizations", names)
-        self.assertNotIn("config_cli_diff", names)
+        self.assertEqual(names, set(TOOLS_BY_NAME))
 
     def test_read_and_admin_partitions(self) -> None:
         self.assertTrue(all(tool.tier == READ for tool in tool_registry.READ_TOOLS))
@@ -95,7 +96,6 @@ class CedarBundleTests(unittest.TestCase):
             "kc-deny-extension-missing",
             "kc-deny-writes-disabled",
             "kc-deny-unapproved-write",
-            "kc-deny-config-apply-without-admin",
         ):
             self.assertIn(f'@id("{policy_id}")', text)
         # Deny-by-default means there is no unconditional permit.
@@ -179,7 +179,7 @@ class PepDecisionTests(unittest.TestCase):
     def test_allow_carries_policy_and_bundle_hash(self) -> None:
         fake = FakePdp()
         decision = make_pep(fake).authorize(
-            _tool("list_realms"),
+            _tool("get_extension_inventory"),
             principal_type="Client",
             principal_id="mcp-claude",
             realm="lab",
@@ -190,12 +190,12 @@ class PepDecisionTests(unittest.TestCase):
         self.assertEqual(len(decision.bundle_hash), 64)
         request = fake.requests[0]
         self.assertEqual(request["action"]["id"], "Read")
-        self.assertEqual(request["resource"]["id"], "list_realms")
+        self.assertEqual(request["resource"]["id"], "get_extension_inventory")
         self.assertEqual(request["principal"]["id"], "mcp-claude")
 
     def test_deny_is_returned_without_failing_closed(self) -> None:
         decision = make_pep(FakePdp(decision="deny")).authorize(
-            _tool("list_realms"),
+            _tool("get_extension_inventory"),
             principal_type="Client",
             principal_id="mcp-claude",
             realm="lab",
@@ -208,7 +208,7 @@ class PepDecisionTests(unittest.TestCase):
         fake = FakePdp()
         fake.error = PdpError("the Cedar PDP exceeded 500 ms")
         decision = make_pep(fake).authorize(
-            _tool("list_realms"),
+            _tool("get_extension_inventory"),
             principal_type="Client",
             principal_id="mcp-claude",
             realm="lab",
@@ -223,7 +223,7 @@ class PepDecisionTests(unittest.TestCase):
             blocker = Path(directory) / "not-a-directory"
             blocker.write_text("x")
             decision = make_pep(FakePdp(), audit_path=blocker / "audit.jsonl").authorize(
-                _tool("list_realms"),
+                _tool("get_extension_inventory"),
                 principal_type="Client",
                 principal_id="mcp-claude",
                 realm="lab",
@@ -236,29 +236,28 @@ class PepDecisionTests(unittest.TestCase):
         fake = FakePdp()
         pep = make_pep(fake)
         pep.authorize(
-            _tool("magic_link_create"),
+            _tool("set_user_locale"),
             principal_type="Client",
             principal_id="mcp-admin",
             realm="lab",
-            extensions=["magic-link"],
+            extensions=["core"],
             writes_enabled=True,
-            approval={"verified": True, "tool": "magic_link_create", "expiresIn": 0},
+            approval={"verified": True, "tool": "set_user_locale", "expiresIn": 0},
         )
         context = fake.requests[0]["context"]
         self.assertFalse(context["approvalVerified"])
         self.assertTrue(context["writesEnabled"])
-        self.assertIn("magic-link", context["extensions"])
         self.assertIn("core", context["extensions"])
-        self.assertEqual(context["approvalTool"], "magic_link_create")
+        self.assertEqual(context["approvalTool"], "set_user_locale")
 
     def test_context_rejects_bad_approval_shape_without_crashing(self) -> None:
         fake = FakePdp()
         decision = make_pep(fake).authorize(
-            _tool("magic_link_create"),
+            _tool("set_user_locale"),
             principal_type="Client",
             principal_id="mcp-admin",
             realm="lab",
-            extensions=["magic-link"],
+            extensions=["core"],
             writes_enabled=True,
             approval={"verified": True, "tool": "other", "expiresIn": "soon"},
         )
@@ -269,7 +268,7 @@ class PepDecisionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             audit = Path(directory) / "authz.jsonl"
             make_pep(FakePdp(), audit_path=audit).authorize(
-                _tool("list_realms"),
+                _tool("get_extension_inventory"),
                 principal_type="Client",
                 principal_id="mcp-claude",
                 realm="lab",
@@ -279,8 +278,8 @@ class PepDecisionTests(unittest.TestCase):
             mode = stat.S_IMODE(os.stat(audit).st_mode)
         self.assertEqual(mode & 0o077, 0)
         record = json.loads(text.splitlines()[0])
-        self.assertEqual(record["tool"], "list_realms")
-        self.assertEqual(record["policyId"], "kc-read-list-realms")
+        self.assertEqual(record["tool"], "get_extension_inventory")
+        self.assertEqual(record["policyId"], "kc-read-get-extension-inventory")
         self.assertEqual(len(record["bundleHash"]), 64)
         self.assertNotIn("search", text)
         self.assertNotIn("realm=", text)
@@ -311,18 +310,18 @@ class RealCedarTests(unittest.TestCase):
             principal_type="Client",
             principal_id="mcp-claude",
             realm="lab",
-            extensions=["orgs", "magic-link", "config-cli"],
+            extensions=["core"],
         )
         parameters.update(kwargs)
         return self.pep.authorize(_tool(tool), **parameters)  # type: ignore[arg-type]
 
     def test_real_read_allowed_in_realm(self) -> None:
-        decision = self.authorize("list_realms")
+        decision = self.authorize("get_extension_inventory")
         self.assertTrue(decision.allowed)
-        self.assertEqual(decision.reasons, ("kc-read-list-realms",))
+        self.assertEqual(decision.reasons, ("kc-read-get-extension-inventory",))
 
     def test_real_cross_realm_denied(self) -> None:
-        decision = self.authorize("list_realms", realm="other")
+        decision = self.authorize("get_extension_inventory", realm="other")
         self.assertFalse(decision.allowed)
         self.assertIn("kc-deny-cross-realm", decision.reasons)
 
@@ -336,7 +335,7 @@ class RealCedarTests(unittest.TestCase):
         self.assertTrue(self.authorize("list_users", user=helpdesk).allowed)
         self.assertFalse(self.authorize("list_users", user=no_role).allowed)
         self.assertFalse(self.authorize("list_users", user=no_scope).allowed)
-        self.assertFalse(self.authorize("list_realms", user=helpdesk).allowed)
+        self.assertFalse(self.authorize("get_extension_inventory", user=helpdesk).allowed)
         self.assertIn("kc-deny-cross-realm", self.authorize("list_users", realm="other", user=helpdesk).reasons)
 
     def test_locale_scope_is_independent_and_approval_still_required(self) -> None:
@@ -373,30 +372,19 @@ when { 9223372036854775807 + 1 == 0 };
         self.assertTrue(decision.failed_closed)
         self.assertIn("pdp_diagnostics", decision.reasons)
 
-    def test_real_extension_missing_denied(self) -> None:
-        decision = self.authorize("list_organizations", extensions=[])
-        self.assertFalse(decision.allowed)
-        self.assertIn("kc-deny-extension-missing", decision.reasons)
-
-    def test_real_extension_installed_allowed(self) -> None:
-        decision = self.authorize("list_organizations", extensions=["orgs"])
-        self.assertTrue(decision.allowed)
-
     def test_real_write_requires_enabled_and_approval(self) -> None:
-        approval = {"verified": True, "tool": "magic_link_create", "expiresIn": 60}
-        disabled = self.authorize("magic_link_create", writes_enabled=False, approval=approval)
+        approval = {"verified": True, "tool": "set_user_locale", "expiresIn": 60}
+        user = UserPrincipal(
+            "https://keycloak.example/realms/lab", "fixture", "desktop", "lab",
+            frozenset({USER_LOCALE.scope}), frozenset({USER_LOCALE.role}),
+        )
+        disabled = self.authorize("set_user_locale", user=user, writes_enabled=False, approval=approval)
         self.assertIn("kc-deny-writes-disabled", disabled.reasons)
-        no_approval = self.authorize("magic_link_create", writes_enabled=True, approval=None)
+        no_approval = self.authorize("set_user_locale", user=user, writes_enabled=True, approval=None)
         self.assertFalse(no_approval.allowed)
-        approved = self.authorize("magic_link_create", writes_enabled=True, approval=approval)
+        approved = self.authorize("set_user_locale", user=user, writes_enabled=True, approval=approval)
         self.assertTrue(approved.allowed)
-        self.assertIn("kc-write-magic-link-create", approved.reasons)
-
-    def test_real_admin_tier_requires_admin_principal(self) -> None:
-        allowed = self.authorize("config_cli_diff", principal_id="mcp-admin")
-        self.assertTrue(allowed.allowed)
-        denied = self.authorize("config_cli_diff", principal_id="mcp-claude")
-        self.assertFalse(denied.allowed)
+        self.assertIn("kc-write-set-user-locale", approved.reasons)
 
     def test_real_unknown_tool_denied(self) -> None:
         unknown = ToolSpec(
@@ -416,12 +404,6 @@ when { 9223372036854775807 + 1 == 0 };
         )
         self.assertFalse(decision.allowed)
         self.assertIn("kc-deny-unknown-tool", decision.reasons)
-
-    def test_real_disabled_config_cli_extension_denied(self) -> None:
-        decision = self.authorize("config_cli_diff", principal_id="mcp-admin", extensions=[])
-        self.assertFalse(decision.allowed)
-        self.assertIn("kc-deny-extension-missing", decision.reasons)
-
 
 STUB_PREAMBLE = """
 import fs from "node:fs";
@@ -496,7 +478,7 @@ class PdpRecoveryTests(unittest.TestCase):
 
     def authorize(self):
         return self.pep.authorize(
-            _tool("list_realms"),
+            _tool("get_extension_inventory"),
             principal_type="Client",
             principal_id="mcp-claude",
             realm="lab",

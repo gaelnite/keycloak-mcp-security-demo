@@ -45,5 +45,5 @@ signing-key rollover.
 | MCP returns a scope denial | Recheck the selected scope and role in the token; the interactive guide describes eligible grants |
 | Admin call fails | Confirm the delegated profile is active and repeat the delegated verification; the interactive profile intentionally disables Admin dispatch |
 
-The old systemd/Podman runbook is [AUTOMATION.md](AUTOMATION.md); it uses script-minted SVIDs and is not
-the Docker/SPIRE operational path.
+The [archived systemd/Podman runbook](https://github.com/gaelnite/keycloak-mcp-security-demo/blob/archive/legacy-podman-26.8.1/docs/AUTOMATION.md)
+covers the historical script-issued SVID fixture.

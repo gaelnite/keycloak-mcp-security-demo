@@ -15,7 +15,6 @@ the resulting Admin request. [Delegated demo](MCP-DELEGATION.md) ·
 | Delegated Docker, Keycloak 26.8.2 | User signs in with PKCE. The MCP workload uses a SPIRE-issued JWT-SVID for each exchange. | Selected user/client reads and one approved fixture-locale write through the private Admin gateway. |
 | Interactive Docker, 26.8.2 | Same user sign-in and role-scoped grants. | Discovery and Cedar decisions for the desktop user. Admin dispatch is disabled. |
 | Headless Docker, 26.8.2 | A registered workload obtains a JWT-SVID and authenticates to Keycloak. | Read-only extension inventory. |
-| Legacy Podman, 26.8.1 | Script-issued JWT-SVID and pre-registered client, plus a separate dynamic CIMD experiment. | The MCP server forwards the caller's token for Admin calls. Use only in a disposable lab. |
 
 ## Delegated Docker trust boundaries
 
@@ -56,28 +55,16 @@ decision log. [Authorization](AUTHZ.md) · [Policy enforcement code](../mcp/pep.
   Scope a separate review for a shared network, a real tenant or different
   Keycloak, SPIRE or MCP versions.
 
-## Legacy Podman constraints
+## Historical research
 
-The legacy issuer reads local signing material. Its CIMD metadata server binds
-to loopback and serves three allowlisted files. The admission profile restricts
-domains to `localhost`, redirects to the same domain and metadata caching to at
-most one hour. A process trusted by the local CA can still host eligible
-metadata. The SPIFFE subject binding is configured on the pre-registered client.
-[Authentication results](AUTHN-RESULTS.md)
-
-The legacy stack trusts the service account and filesystem permissions for its
-bootstrap secret and signing keys. Its TLS server key is readable for the
-rootless container, the legacy Terraform provider defaults to skipping TLS verification,
-and Keycloak uses host networking. Verify management listener exposure on the
-actual host. Caller-token passthrough and in-memory approval replay state give
-this profile different credential and restart boundaries from the delegated demo.
-[Deployment](DEPLOYMENT.md) · [Operations](OPERATIONS.md)
+The read-only archive preserves the Keycloak 26.8.1 lab, including script-issued
+SVIDs, dynamic CIMD, caller-token passthrough, and the optional extension tools.
+[Archived threat assumptions](https://github.com/gaelnite/keycloak-mcp-security-demo/blob/archive/legacy-podman-26.8.1/docs/SECURITY.md)
 
 ## Verification
 
 The unit suite exercises JWT validation, scope and role checks, Cedar decisions,
 path handling and approval replay. CI also starts each Docker profile and checks
 its live contract. The delegated gate changes and restores the synthetic fixture
-and checks replay after restarting MCP. The legacy live checks require their
-separate Keycloak installation. [Contribution checks](../CONTRIBUTING.md) ·
+and checks replay after restarting MCP. [Contribution checks](../CONTRIBUTING.md) ·
 [Docker CI](../.github/workflows/docker-demo.yml) · [Reporting](../SECURITY.md)

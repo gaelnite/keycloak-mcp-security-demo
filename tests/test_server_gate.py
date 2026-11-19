@@ -46,7 +46,6 @@ class ServerGateTests(unittest.TestCase):
                 "KC_AUDIENCE": "https://mcp.lab.local/mcp",
                 "KC_URL": "https://kc.lab.local:8443",
                 "KC_ALLOWED_CLIENT_IDS": "https://cimd.lab.local:8444/client-metadata.json",
-                "KC_EXTENSIONS": "orgs,config-cli",
             }
         )
 
@@ -73,26 +72,20 @@ class ServerGateTests(unittest.TestCase):
 
     def test_missing_token_scope_is_denied_before_the_pep(self) -> None:
         server._CLAIMS.set(self.claims(scopes=[]))
-        result = asyncio.run(server._authorized_call(server.SPECS["list_realms"]))
+        result = asyncio.run(server._authorized_call(server.SPECS["get_extension_inventory"]))
         self.assertIn("scope", result["error"].lower())
         self.assertEqual(self.pep.calls, 0)
 
-    def test_admin_tier_needs_the_token_role(self) -> None:
-        server._CLAIMS.set(self.claims(scopes=["keycloak.config.read"], admin=False))
-        result = asyncio.run(server._authorized_call(server.SPECS["config_cli_diff"]))
-        self.assertIn("mcp-admin", result["error"])
-        self.assertEqual(self.pep.calls, 0)
-
-    def test_scope_and_admin_pass_reach_the_pep(self) -> None:
-        server._CLAIMS.set(self.claims(scopes=["keycloak.config.read"], admin=True))
-        result = asyncio.run(server._authorized_call(server.SPECS["config_cli_diff"]))
+    def test_inventory_scope_reaches_the_pep(self) -> None:
+        server._CLAIMS.set(self.claims(scopes=["keycloak.extensions.read"]))
+        result = asyncio.run(server._authorized_call(server.SPECS["get_extension_inventory"]))
         self.assertEqual(self.pep.calls, 1)
         self.assertIn("Cedar denied", result["error"])
 
     def test_expired_stdio_token_is_rejected_before_policy_evaluation(self) -> None:
-        claims = replace(self.claims(scopes=["keycloak.realms.read"]), expires_at=1)
+        claims = replace(self.claims(scopes=["keycloak.extensions.read"]), expires_at=1)
         with patch.object(server, "_STDIO_CLAIMS", claims), self.assertRaisesRegex(TokenError, "expired"):
-            asyncio.run(server._authorized_call(server.SPECS["list_realms"]))
+            asyncio.run(server._authorized_call(server.SPECS["get_extension_inventory"]))
         self.assertEqual(self.pep.calls, 0)
 
 
