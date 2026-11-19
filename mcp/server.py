@@ -24,8 +24,7 @@ import time
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Mapping, Sequence
-from urllib.parse import quote
+from typing import Any, Sequence
 
 import httpx
 from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
@@ -37,27 +36,23 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from approval import (
-    ApprovalError,
-    ApprovalVerifier,
-    SqliteJtiStore,
-)
+from approval import ApprovalError
 from auth import (
-    KeycloakAuthConfig,
     KeycloakTokenVerifier,
     ProtectedResource,
     TokenClaims,
     TokenError,
     bearer_from_header,
 )
-from delegation import DelegatedAdmin, DelegationConfig, DelegationError, gateway_capability
+from delegation import DelegatedAdmin, DelegationError, gateway_capability
+from generated_tool_wrappers import build_tool_functions
+from keycloak_admin import KeycloakAdmin
 from pep import CedarPep, PepError, UserPrincipal, pep_from_env
-from tool_registry import LOCALE_FIXTURE_ID, LOCALES, TOOLS, ToolSpec
+from server_config import ConfigError, ServerConfig
+from tool_handlers import TOOL_IMPLS, ValidationError, path_segment
+from tool_registry import LOCALE_FIXTURE_ID, LOCALES, TOOLS, TOOLS_BY_NAME as SPECS, ToolSpec
 
-HERE = Path(__file__).resolve().parent
 DEFAULT_PORT = 8766
-MAX_TOOL_ROWS = 50
-HTTP_TIMEOUT = 15.0
 ADMIN_CHECK_PATH = "/__delegated_admin_check"
 
 
@@ -77,155 +72,11 @@ _RUNTIME: "Runtime | None" = None
 log = logging.getLogger("keycloak-mcp")
 
 
-def _truthy(value: str | None) -> bool:
-    return (value or "").strip().lower() in {"1", "true", "yes", "on"}
-
-
-class ConfigError(Exception):
-    pass
-
-
-class ValidationError(RuntimeError):
-    """A caller-supplied value cannot safely become one Admin API path segment."""
-
-
-# ---------------------------------------------------------------------------
-# Admin API path segments (docs/SECURITY.md T17)
-# ---------------------------------------------------------------------------
-# Caller values are interpolated into /admin/realms/... URLs. An unvalidated
-# value with '/', '?', '#' or dot segments adds resources or a query the caller
-# was never authorized for (check-then-use divergence); '%' would smuggle
-# %2f/%2e escapes past the check. So every interpolated value must be exactly
-# one segment: reject structural, percent, dot-segment and control characters,
-# then percent-encode. The encoded segment decodes to the exact string Cedar
-# and the approval gate saw.
-_SEGMENT_MAX = 255
-_SEGMENT_REJECTED = frozenset("/?#%\\")
-
-
-def path_segment(value: Any, *, field: str) -> str:
-    """Validate one caller-supplied Admin path segment; fail closed.
-
-    Returns the percent-encoded segment. Raises ValidationError for empty,
-    non-string, oversized, dot-segment, structural ('/', '?', '#', '\\',
-    '%') or control characters, so a value can never open a second path
-    segment, a query, or a fragment in an Admin API URL.
-    """
-    if not isinstance(value, str) or not value:
-        raise ValidationError(f"{field} must be a non-empty string")
-    if len(value) > _SEGMENT_MAX:
-        raise ValidationError(f"{field} must be at most {_SEGMENT_MAX} characters")
-    if value in (".", ".."):
-        raise ValidationError(f"{field} must not be a dot segment")
-    if any(ch in _SEGMENT_REJECTED for ch in value):
-        raise ValidationError(
-            f"{field} must not contain path, query, fragment, or percent characters"
-        )
-    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in value):
-        raise ValidationError(f"{field} must not contain control characters")
-    return quote(value, safe="")
-
-
-def _https_base(raw: str) -> str:
-    from urllib.parse import urlparse
-
-    value = (raw or "").strip().rstrip("/")
-    parsed = urlparse(value)
-    if parsed.scheme != "https" or not parsed.hostname:
-        raise ConfigError("KC_URL must be an https:// base URL with a host")
-    if parsed.username or parsed.password or parsed.query or parsed.fragment:
-        raise ConfigError("KC_URL must not contain credentials, a query or a fragment")
-    return value
-
-
-@dataclass(frozen=True)
-class ServerConfig:
-    auth: KeycloakAuthConfig
-    base_url: str
-    extensions: frozenset[str]
-    writes_enabled: bool
-    audit_log: str | None
-    client_entity_map: Mapping[str, str]
-    approval: ApprovalVerifier | None
-    tool_allowlist: frozenset[str] | None = None
-    delegation: DelegationConfig | None = None
-
-    @classmethod
-    def from_env(cls, env: Mapping[str, str] | None = None) -> "ServerConfig":
-        values = dict(os.environ if env is None else env)
-        auth = KeycloakAuthConfig.from_env(values)
-        base_url = _https_base(values.get("KC_URL") or "")
-        extensions = frozenset(
-            part.strip()
-            for part in (values.get("KC_EXTENSIONS") or "core").replace(",", " ").split()
-            if part.strip()
-        )
-        try:
-            entity_map = json.loads(values.get("KC_MCP_CLIENT_ENTITY_MAP") or "{}")
-        except json.JSONDecodeError as exc:
-            raise ConfigError(f"KC_MCP_CLIENT_ENTITY_MAP is not JSON: {exc}") from exc
-        if not isinstance(entity_map, dict) or not all(
-            isinstance(key, str) and isinstance(value, str) for key, value in entity_map.items()
-        ):
-            raise ConfigError("KC_MCP_CLIENT_ENTITY_MAP must be a JSON object of string pairs")
-        try:
-            approval = ApprovalVerifier.from_env(values)
-        except ApprovalError as exc:
-            raise ConfigError(str(exc)) from exc
-        writes_enabled = _truthy(values.get("KC_MCP_ENABLE_WRITES"))
-        if writes_enabled and approval is None:
-            raise ConfigError(
-                "KC_MCP_ENABLE_WRITES=1 requires KC_MCP_APPROVAL_PUBLIC_KEY_FILE; writes "
-                "cannot be enabled without independent human approval"
-            )
-        tool_allowlist = None
-        if "KC_MCP_TOOL_ALLOWLIST" in values:
-            tool_allowlist = frozenset(values["KC_MCP_TOOL_ALLOWLIST"].replace(",", " ").split())
-            if unknown := tool_allowlist.difference(SPECS):
-                raise ConfigError("KC_MCP_TOOL_ALLOWLIST contains unknown tools: " + ", ".join(sorted(unknown)))
-        if auth.interactive_client_ids.intersection(entity_map):
-            raise ConfigError("interactive clients cannot also use static Cedar client mappings")
-        delegation = DelegationConfig.from_env(auth, values)
-        if delegation is not None and writes_enabled and (
-            not isinstance(approval.jti_store, SqliteJtiStore)
-            or approval.audience != auth.audience or approval.max_ttl > 120
-        ):
-            raise ConfigError("Delegated writes require resource-bound approval up to 120 seconds and a durable replay database")
-        return cls(
-            auth=auth,
-            base_url=base_url,
-            extensions=extensions,
-            writes_enabled=writes_enabled,
-            audit_log=(values.get("KC_MCP_AUDIT_LOG") or "").strip() or None,
-            client_entity_map=entity_map,
-            approval=approval,
-            tool_allowlist=tool_allowlist,
-            delegation=delegation,
-        )
-
-    def redacted(self) -> dict[str, Any]:
-        return {
-            "issuer": self.auth.issuer,
-            "audience": self.auth.audience,
-            "resource_url": self.auth.protected_resource.url if self.auth.protected_resource else None,
-            "realm": self.auth.realm,
-            "jwks_url": self.auth.jwks_url,
-            "allowed_client_ids": sorted(self.auth.allowed_client_ids),
-            "interactive_client_ids": sorted(self.auth.interactive_client_ids),
-            "base_url": self.base_url,
-            "extensions": sorted(self.extensions),
-            "writes_enabled": self.writes_enabled,
-            "delegation_configured": self.delegation is not None,
-            "approval_configured": self.approval is not None,
-            "audit_log": self.audit_log,
-        }
-
-
 @dataclass
 class Runtime:
     config: ServerConfig
     pep: CedarPep
-    admin: "KeycloakAdmin"
+    admin: KeycloakAdmin
     delegation: DelegatedAdmin | None = None
 
 
@@ -289,105 +140,6 @@ def _runtime() -> Runtime:
 
 
 # ---------------------------------------------------------------------------
-# Keycloak Admin API (caller-token passthrough; no service-account secret)
-# ---------------------------------------------------------------------------
-class KeycloakAdmin:
-    def __init__(self, config: ServerConfig, *, transport: httpx.AsyncBaseTransport | None = None) -> None:
-        self.config = config
-        self._transport = transport
-        self._client: httpx.AsyncClient | None = None
-
-    async def _http(self) -> httpx.AsyncClient:
-        if self._client is None:
-            self._client = httpx.AsyncClient(
-                base_url=self.config.base_url,
-                timeout=HTTP_TIMEOUT,
-                follow_redirects=False,
-                transport=self._transport,
-            )
-        return self._client
-
-    async def get(self, path: str, *, params: Mapping[str, Any] | None = None) -> Any:
-        client = await self._http()
-        response = await client.get(
-            path,
-            params=dict(params or {}),
-            headers={"Authorization": f"Bearer {current_token()}", "Accept": "application/json"},
-        )
-        if response.status_code == 401:
-            raise TokenError("Keycloak rejected the caller token for the Admin API", code="invalid_token")
-        if response.status_code == 403:
-            raise PermissionError(
-                "Keycloak denied the Admin API call; the caller needs the matching realm-management role"
-            )
-        if response.status_code >= 400:
-            raise RuntimeError(f"Keycloak Admin API returned HTTP {response.status_code}")
-        return response.json()
-
-    async def aclose(self) -> None:
-        if self._client is not None:
-            await self._client.aclose()
-
-
-def _capped(items: Any) -> Any:
-    return items[:MAX_TOOL_ROWS] if isinstance(items, list) else items
-
-
-# ---------------------------------------------------------------------------
-# tool implementations
-# ---------------------------------------------------------------------------
-async def list_clients(admin: KeycloakAdmin, realm: str, search: str = "", **_: Any) -> Any:
-    params: dict[str, Any] = {"max": MAX_TOOL_ROWS, "first": 0}
-    if search:
-        params["search"] = search
-    return _capped(await admin.get(f"/admin/realms/{path_segment(realm, field='realm')}/clients", params=params))
-
-
-async def get_client(admin: KeycloakAdmin, realm: str, client_id: str, **_: Any) -> Any:
-    matches = await admin.get(
-        f"/admin/realms/{path_segment(realm, field='realm')}/clients", params={"clientId": client_id, "max": 1}
-    )
-    if not matches:
-        raise RuntimeError(f"no client with clientId {client_id!r} in realm {realm!r}")
-    return await admin.get(
-        f"/admin/realms/{path_segment(realm, field='realm')}/clients/"
-        f"{path_segment(str(matches[0]['id']), field='client uuid')}"
-    )
-
-
-async def list_users(admin: KeycloakAdmin, realm: str, search: str = "", **_: Any) -> Any:
-    params: dict[str, Any] = {"max": MAX_TOOL_ROWS, "first": 0, "briefRepresentation": "true"}
-    if search:
-        params["search"] = search
-    return _capped(await admin.get(f"/admin/realms/{path_segment(realm, field='realm')}/users", params=params))
-
-
-async def get_user(admin: KeycloakAdmin, realm: str, user_id: str, **_: Any) -> Any:
-    return await admin.get(
-        f"/admin/realms/{path_segment(realm, field='realm')}/users/{path_segment(user_id, field='user_id')}"
-    )
-
-
-async def get_extension_inventory(config: ServerConfig, **_: Any) -> Any:
-    return {
-        "installed": sorted(config.extensions),
-        "tools": {
-            extension: [tool.name for tool in TOOLS if tool.extension == extension]
-            for extension in sorted(config.extensions | {"core"})
-        },
-    }
-
-
-TOOL_IMPLS: dict[str, Callable[..., Awaitable[Any]]] = {
-    "list_clients": list_clients,
-    "get_client": get_client,
-    "list_users": list_users,
-    "get_user": get_user,
-    "get_extension_inventory": get_extension_inventory,
-}
-
-
-# ---------------------------------------------------------------------------
 # authorization gate (live token scopes, followed by Cedar)
 # ---------------------------------------------------------------------------
 def _error(message: str, *, policy_id: str, decision: Any | None = None) -> dict[str, Any]:
@@ -423,6 +175,8 @@ def _delegated_approval(runtime: Runtime, user: UserPrincipal, spec: ToolSpec, a
 
 
 async def _authorized_call(spec: ToolSpec, **kwargs: Any) -> Any:
+    if spec.name == "set_user_locale" and kwargs["locale"] not in LOCALES:
+        return _error("locale must be en, de or fr", policy_id=spec.policy_id)
     runtime = _runtime()
     claims = current_claims()
     user = None
@@ -511,43 +265,7 @@ async def _authorized_call(spec: ToolSpec, **kwargs: Any) -> Any:
         return {"error": f"Keycloak request failed: {exc.__class__.__name__}", "policy_id": spec.policy_id}
 
 
-# -- explicit MCP tool signatures (FastMCP builds each input schema from these) --
-async def tool_list_clients(realm: str, search: str = "") -> Any:
-    return await _authorized_call(SPECS["list_clients"], realm=realm, search=search)
-
-
-async def tool_get_client(realm: str, client_id: str) -> Any:
-    return await _authorized_call(SPECS["get_client"], realm=realm, client_id=client_id)
-
-
-async def tool_list_users(realm: str, search: str = "") -> Any:
-    return await _authorized_call(SPECS["list_users"], realm=realm, search=search)
-
-
-async def tool_get_user(realm: str, user_id: str) -> Any:
-    return await _authorized_call(SPECS["get_user"], realm=realm, user_id=user_id)
-
-
-async def tool_get_extension_inventory() -> Any:
-    return await _authorized_call(SPECS["get_extension_inventory"])
-
-
-async def tool_set_user_locale(realm: str, user_id: str, locale: str, approval: str = "") -> Any:
-    spec = SPECS["set_user_locale"]
-    if locale not in LOCALES:
-        return _error("locale must be en, de or fr", policy_id=spec.policy_id)
-    return await _authorized_call(spec, realm=realm, user_id=user_id, locale=locale, approval=approval)
-
-
-SPECS = {tool.name: tool for tool in TOOLS}
-TOOL_FUNCTIONS: dict[str, Callable[..., Awaitable[Any]]] = {
-    "list_clients": tool_list_clients,
-    "get_client": tool_get_client,
-    "list_users": tool_list_users,
-    "get_user": tool_get_user,
-    "get_extension_inventory": tool_get_extension_inventory,
-    "set_user_locale": tool_set_user_locale,
-}
+TOOL_FUNCTIONS = build_tool_functions(_authorized_call)
 
 
 def _register_tools(mcp: FastMCP, config: ServerConfig) -> list[str]:
@@ -764,7 +482,12 @@ def _stdio_token() -> str:
 
 def build_runtime(config: ServerConfig) -> Runtime:
     delegate = DelegatedAdmin(config.delegation) if config.delegation else None
-    return Runtime(config=config, pep=pep_from_env(), admin=KeycloakAdmin(config), delegation=delegate)
+    return Runtime(
+        config=config,
+        pep=pep_from_env(),
+        admin=KeycloakAdmin(config.base_url, current_token),
+        delegation=delegate,
+    )
 
 
 def main(argv: Sequence[str] | None = None) -> int:

@@ -66,7 +66,7 @@ approval. Never expose the private Admin gateway through the public edge.
 ## Tool and policy source
 
 [`mcp/tool_registry.py`](../mcp/tool_registry.py) defines six tool records with
-scope, tier, extension and Cedar policy ID. Registration respects the deployment
+scope, tier, extension, Cedar policy ID, and public argument types and defaults. Registration respects the deployment
 allowlist and write setting. Interactive entitlement and scope restrict discovery
 and are checked again on each call. The normal
 headless Docker profile exposes only `get_extension_inventory`.
@@ -74,10 +74,16 @@ headless Docker profile exposes only `get_extension_inventory`.
 | Source | Responsibility |
 |---|---|
 | [`mcp/server.py`](../mcp/server.py) | CLI, stdio/HTTP, token middleware, registration and dispatch gates. |
+| [`mcp/server_config.py`](../mcp/server_config.py) | Configuration parsing and validation. |
+| [`mcp/keycloak_admin.py`](../mcp/keycloak_admin.py), [`mcp/tool_handlers.py`](../mcp/tool_handlers.py) | Direct read client, path checks, and tool implementations. |
+| [`mcp/gen_tool_wrappers.py`](../mcp/gen_tool_wrappers.py) | Generates typed wrappers that forward all calls to the common authorization gate. |
 | [`mcp/auth.py`](../mcp/auth.py) | Issuer, audience, JWKS, time and client allowlist verification. |
 | [`mcp/pep.py`](../mcp/pep.py), [`mcp/pdp.mjs`](../mcp/pdp.mjs) | Cedar PEP, fail-closed decisions, Node PDP and optional audit. |
 | [`mcp/delegation.py`](../mcp/delegation.py) | Capability-specific exchange, token validation, route mapping and response projection. |
 | [`mcp/gen_cedar.py`](../mcp/gen_cedar.py), [`cedar/`](../cedar/) | Generated policies, entities and schema. |
+
+After changing a public tool argument, run `python3 mcp/gen_tool_wrappers.py --write`.
+CI checks the generated file against the registry.
 
 For protocol scope, the automated MCP clients negotiate `2025-11-25`. The linked
 current MCP authorization specification is `2026-07-28`; the newer revision is

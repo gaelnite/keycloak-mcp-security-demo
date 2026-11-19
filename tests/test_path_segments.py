@@ -1,6 +1,6 @@
 """SEC-05 (T17): Admin path-argument validation and check-then-use parity.
 
-Crafted realm/user_id/org_id must never add a path segment, dot traversal,
+Crafted realm/user_id must never add a path segment, dot traversal,
 query, or fragment to an Admin API URL, and Cedar/approval must see exactly
 the value the URL uses. Needs the MCP SDK; skipped on bare Python.
 """
@@ -25,6 +25,7 @@ except (ImportError, ValueError):  # pragma: no cover - depends on the interpret
 
 if HAVE_MCP:
     import server
+    import tool_handlers
     from auth import TokenClaims
     from pep import Decision
 
@@ -68,27 +69,27 @@ class _AllowPep:
 @unittest.skipUnless(HAVE_MCP, "the MCP SDK is required for server tests")
 class PathSegmentUnitTests(unittest.TestCase):
     def test_valid_values_pass_through_unchanged(self):
-        self.assertEqual(server.path_segment("lab", field="realm"), "lab")
+        self.assertEqual(tool_handlers.path_segment("lab", field="realm"), "lab")
         uuid = "f47ac10b-58cc-4372-a567-0e02b2c3d479"
-        self.assertEqual(server.path_segment(uuid, field="user_id"), uuid)
-        self.assertEqual(server.path_segment("my.realm-1_2~x", field="realm"), "my.realm-1_2~x")
+        self.assertEqual(tool_handlers.path_segment(uuid, field="user_id"), uuid)
+        self.assertEqual(tool_handlers.path_segment("my.realm-1_2~x", field="realm"), "my.realm-1_2~x")
 
     def test_non_structural_characters_are_encoded_into_one_segment(self):
-        encoded = server.path_segment("foo bar", field="realm")
+        encoded = tool_handlers.path_segment("foo bar", field="realm")
         self.assertEqual(encoded, "foo%20bar")
         self.assertEqual(unquote(encoded), "foo bar")
 
     def test_crafted_values_are_rejected(self):
         for value in CRAFTED:
             with self.subTest(value=value):
-                with self.assertRaises(server.ValidationError):
-                    server.path_segment(value, field="realm")
+                with self.assertRaises(tool_handlers.ValidationError):
+                    tool_handlers.path_segment(value, field="realm")
 
     def test_empty_non_string_and_oversized_are_rejected(self):
         for value in ("", None, 123, "x" * 256):
             with self.subTest(value=repr(value)[:30]):
-                with self.assertRaises(server.ValidationError):
-                    server.path_segment(value, field="realm")
+                with self.assertRaises(tool_handlers.ValidationError):
+                    tool_handlers.path_segment(value, field="realm")
 
 
 @unittest.skipUnless(HAVE_MCP, "the MCP SDK is required for server tests")
@@ -98,27 +99,27 @@ class ImplInterpolationTests(unittest.TestCase):
 
     def test_no_http_call_for_crafted_values(self):
         cases = [
-            (server.get_user, {"realm": "lab", "user_id": "123/credentials"}),
-            (server.get_user, {"realm": "lab/role-mappings", "user_id": "123"}),
-            (server.list_clients, {"realm": ".."}),
-            (server.list_users, {"realm": "lab?x=1"}),
+            (tool_handlers.get_user, {"realm": "lab", "user_id": "123/credentials"}),
+            (tool_handlers.get_user, {"realm": "lab/role-mappings", "user_id": "123"}),
+            (tool_handlers.list_clients, {"realm": ".."}),
+            (tool_handlers.list_users, {"realm": "lab?x=1"}),
         ]
         for impl, kwargs in cases:
             with self.subTest(impl=impl.__name__, **kwargs):
-                with self.assertRaises(server.ValidationError):
+                with self.assertRaises(tool_handlers.ValidationError):
                     asyncio.run(impl(admin=self.admin, **kwargs))
         self.assertEqual(self.admin.calls, [])
 
     def test_valid_ids_produce_exactly_the_expected_segments(self):
         uuid = "f47ac10b-58cc-4372-a567-0e02b2c3d479"
-        asyncio.run(server.get_user(admin=self.admin, realm="lab", user_id=uuid))
+        asyncio.run(tool_handlers.get_user(admin=self.admin, realm="lab", user_id=uuid))
         method, path = self.admin.calls[-1]
         self.assertEqual(method, "GET")
         self.assertEqual(path.split("/"), ["", "admin", "realms", "lab", "users", uuid])
 
     def test_get_client_crafted_realm_raises_before_lookup(self):
-        with self.assertRaises(server.ValidationError):
-            asyncio.run(server.get_client(admin=self.admin, realm="lab/../master", client_id="cli"))
+        with self.assertRaises(tool_handlers.ValidationError):
+            asyncio.run(tool_handlers.get_client(admin=self.admin, realm="lab/../master", client_id="cli"))
         self.assertEqual(self.admin.calls, [])
 
     def test_get_client_resolved_uuid_used_as_single_segment(self):
@@ -133,7 +134,7 @@ class ImplInterpolationTests(unittest.TestCase):
                 return {}
 
         admin = _MatchAdmin()
-        asyncio.run(server.get_client(admin=admin, realm="lab", client_id="cli"))
+        asyncio.run(tool_handlers.get_client(admin=admin, realm="lab", client_id="cli"))
         self.assertEqual(
             admin.paths,
             [
@@ -149,8 +150,8 @@ class ImplInterpolationTests(unittest.TestCase):
                     return [{"id": "evil/../credentials"}]
                 raise AssertionError("second request must not be issued")
 
-        with self.assertRaises(server.ValidationError):
-            asyncio.run(server.get_client(admin=_OddAdmin(), realm="lab", client_id="cli"))
+        with self.assertRaises(tool_handlers.ValidationError):
+            asyncio.run(tool_handlers.get_client(admin=_OddAdmin(), realm="lab", client_id="cli"))
 
 @unittest.skipUnless(HAVE_MCP, "the MCP SDK is required for server tests")
 class GateValidationTests(unittest.TestCase):

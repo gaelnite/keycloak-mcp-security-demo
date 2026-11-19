@@ -77,7 +77,9 @@ class McpTransportTests(unittest.IsolatedAsyncioTestCase):
 
         jwks = JwksCache(config.auth.jwks_url, transport=httpx.MockTransport(jwks_response))
         verifier = server.KeycloakTokenVerifier(config.auth, jwks=jwks)
-        admin = server.KeycloakAdmin(config, transport=httpx.MockTransport(admin_response))
+        admin = server.KeycloakAdmin(
+            config.base_url, server.current_token, transport=httpx.MockTransport(admin_response)
+        )
         runtime = server.Runtime(config, self.pep, admin)
         mcp, _ = server.build_mcp(config)
         app = server.build_http_app(mcp, verifier)
@@ -325,7 +327,10 @@ class StdioPep(RecordingPep):
         pass
 
 with patch.object(server, "KeycloakTokenVerifier", verifier), patch.object(
-    server, "build_runtime", lambda config: server.Runtime(config, StdioPep(), server.KeycloakAdmin(config))
+    server, "build_runtime",
+    lambda config: server.Runtime(
+        config, StdioPep(), server.KeycloakAdmin(config.base_url, server.current_token)
+    ),
 ):
     raise SystemExit(server.main(["--transport", "stdio"]))
 """

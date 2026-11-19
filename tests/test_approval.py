@@ -332,12 +332,17 @@ class ServerApprovalWiringTests(unittest.TestCase):
         binding = {"sub": self.actor, "realm": "lab", "locale": "de", **overrides}
         return _token(self.private, **binding)
 
-    def call(self, token):
+    def call(self, token, *, locale="de"):
         return asyncio.run(
-            server._authorized_call(
-                server.SPECS[TOOL], realm="lab", user_id=TARGET, locale="de", approval=token
-            )
+            server.TOOL_FUNCTIONS[TOOL](realm="lab", user_id=TARGET, locale=locale, approval=token)
         )
+
+    def test_invalid_locale_does_not_consume_approval(self) -> None:
+        token = self.token()
+        self.assertIn("locale must be en, de or fr", self.call(token, locale="es")["error"])
+        self.assertEqual(self.pep.authorizations, [])
+        self.assertIn("Cedar denied", self.call(token)["error"])
+        self.assertEqual(len(self.pep.authorizations), 1)
 
     def test_replay_denied_and_audited_no_cedar_call(self) -> None:
         token = self.token()

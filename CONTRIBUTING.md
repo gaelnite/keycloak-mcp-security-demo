@@ -21,6 +21,7 @@ npm ci --prefix mcp
 .venv/bin/python -m unittest discover -s tests -t . -v
 echo '{"op":"validate"}' | node mcp/pdp.mjs
 .venv/bin/python mcp/gen_cedar.py --check
+.venv/bin/python mcp/gen_tool_wrappers.py --check
 ```
 
 The unit suite uses the real Cedar engine. Docker CI builds and verifies the

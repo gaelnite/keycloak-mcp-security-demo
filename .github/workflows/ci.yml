@@ -43,8 +43,10 @@ jobs:
         run: npm ci --no-audit --no-fund
       - name: Validate the policy bundle
         run: echo '{"op":"validate"}' | node mcp/pdp.mjs
-      - name: Check the generated bundle matches the tool registry
-        run: python3 mcp/gen_cedar.py --check
+      - name: Check generated policy and tool wrappers
+        run: |
+          python3 mcp/gen_cedar.py --check
+          python3 mcp/gen_tool_wrappers.py --check
 
   ci-gate:
     if: ${{ always() }}
