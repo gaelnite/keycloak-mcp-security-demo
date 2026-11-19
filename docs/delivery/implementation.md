@@ -20,6 +20,8 @@ These files implement the Docker profiles described in the [verification record]
 - `mcp/tool_registry.py` is the scope, role, resource, and tool catalog. The interactive profiles use
   three capabilities for user reads, client reads and the fixture locale write.
 - `mcp/server.py` applies the deployment allowlist and authorization to discovery and calls.
+  `mcp/server_config.py` validates settings. The registry generates the MCP wrappers, while
+  `mcp/tool_handlers.py` and `mcp/keycloak_admin.py` implement direct Admin reads.
   `mcp/pep.py`, `mcp/gen_cedar.py`, `cedar/`, and `mcp/pdp.mjs` implement and validate Cedar decisions.
 - `mcp/delegation.py` obtains capability-specific SVIDs, exchanges the verified human token, and validates
   the downstream token. `deploy/docker/private-admin.conf` restricts the private gateway by method and

@@ -41,6 +41,13 @@ LOCALES = ("en", "de", "fr")
 
 
 @dataclass(frozen=True)
+class ToolArgument:
+    name: str
+    annotation: type[str] = str
+    default: str | None = None  # None denotes a required string argument.
+
+
+@dataclass(frozen=True)
 class ToolSpec:
     name: str
     description: str
@@ -50,6 +57,7 @@ class ToolSpec:
     extension: str = "core"
     write: bool = False
     capability: Capability | None = None
+    arguments: tuple[ToolArgument, ...] = ()
 
     def __post_init__(self) -> None:
         if self.tier not in TIERS:
@@ -67,7 +75,13 @@ class ToolSpec:
 
 
 def _spec(
-    name: str, description: str, scope: str | Capability, tier: str, extension: str = "core"
+    name: str,
+    description: str,
+    scope: str | Capability,
+    tier: str,
+    *,
+    arguments: tuple[ToolArgument, ...] = (),
+    extension: str = "core",
 ) -> ToolSpec:
     capability = scope if isinstance(scope, Capability) else None
     return ToolSpec(
@@ -79,21 +93,32 @@ def _spec(
         extension=extension,
         write=(tier == WRITE),
         capability=capability,
+        arguments=arguments,
     )
 
 
+REALM = ToolArgument("realm")
+SEARCH = ToolArgument("search", default="")
+USER_ID = ToolArgument("user_id")
+
 TOOLS: tuple[ToolSpec, ...] = (
-    _spec("list_clients", "List OIDC/SAML clients in a realm.", CLIENTS_READ, READ),
-    _spec("get_client", "Read one client's configuration.", CLIENTS_READ, READ),
-    _spec("list_users", "Search users in a realm.", USERS_READ, READ),
-    _spec("get_user", "Read one user's profile and role mappings.", USERS_READ, READ),
+    _spec("list_clients", "List OIDC/SAML clients in a realm.", CLIENTS_READ, READ, arguments=(REALM, SEARCH)),
+    _spec(
+        "get_client", "Read one client's configuration.", CLIENTS_READ, READ,
+        arguments=(REALM, ToolArgument("client_id")),
+    ),
+    _spec("list_users", "Search users in a realm.", USERS_READ, READ, arguments=(REALM, SEARCH)),
+    _spec("get_user", "Read one user's profile and role mappings.", USERS_READ, READ, arguments=(REALM, USER_ID)),
     _spec(
         "get_extension_inventory",
         "List installed Keycloak extensions and the tools mapped to each.",
         "keycloak.extensions.read",
         READ,
     ),
-    _spec("set_user_locale", "Set a user's preferred locale.", USER_LOCALE, WRITE),
+    _spec(
+        "set_user_locale", "Set a user's preferred locale.", USER_LOCALE, WRITE,
+        arguments=(REALM, USER_ID, ToolArgument("locale"), ToolArgument("approval", default="")),
+    ),
 )
 
 TOOLS_BY_NAME = {tool.name: tool for tool in TOOLS}
