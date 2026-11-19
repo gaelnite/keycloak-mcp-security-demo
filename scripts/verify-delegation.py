@@ -110,6 +110,16 @@ WHERE c.client_id = :'requester' AND u.username = 'demo-realm-admin'
 
         writer = McpSession(http, tokens["write"])
         writer.visible("set_user_locale")
+        for legacy_tool, arguments in (
+            ("magic_link_create", {"realm": "lab", "user_id": LOCALE_FIXTURE_ID}),
+            ("config_cli_apply", {}),
+        ):
+            response = writer.request("tools/call", {"name": legacy_tool, "arguments": arguments})
+            assert response.status_code == 200
+            result = response.json()["result"]
+            assert result["isError"] is True
+            assert f"Unknown tool: {legacy_tool}" in result["content"][0]["text"]
+        print("The delegated write session cannot discover or call either legacy write tool.")
         scope_required(writer.call("list_users"), USERS_READ)
         before = locale()
         starting_event_count = matching_admin_updates()
