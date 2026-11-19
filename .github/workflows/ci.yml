@@ -1,8 +1,10 @@
 name: ci
 
 on:
-  push:
   pull_request:
+    branches: [main]
+  push:
+    branches: [main]
 
 permissions:
   contents: read
@@ -12,6 +14,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -33,6 +37,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
@@ -48,6 +54,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: hashicorp/setup-terraform@v3
       - name: Format check
         run: terraform fmt -check -recursive terraform
@@ -60,9 +68,31 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
       - run: pip install "ansible-core>=2.15"
       - run: ansible-playbook -i ansible/inventory/hosts.yml --syntax-check ansible/playbooks/site.yml
       - run: ansible-playbook -i ansible/inventory/hosts.yml --syntax-check ansible/playbooks/teardown.yml
+
+  ci-gate:
+    if: ${{ always() }}
+    needs: [unit-tests, cedar-policy, terraform, ansible-syntax]
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Require all CI jobs to pass
+        env:
+          UNIT_RESULT: ${{ needs.unit-tests.result }}
+          CEDAR_RESULT: ${{ needs.cedar-policy.result }}
+          TERRAFORM_RESULT: ${{ needs.terraform.result }}
+          ANSIBLE_RESULT: ${{ needs.ansible-syntax.result }}
+        run: |
+          for result in "$UNIT_RESULT" "$CEDAR_RESULT" "$TERRAFORM_RESULT" "$ANSIBLE_RESULT"; do
+            if [ "$result" != "success" ]; then
+              echo "::error::A required CI job did not succeed. Review the prerequisite jobs."
+              exit 1
+            fi
+          done

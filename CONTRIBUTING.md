@@ -6,7 +6,9 @@ suspected vulnerability through the [security policy](SECURITY.md).
 
 Open an issue for a change larger than a typo or a single-file fix. Submit a
 focused pull request on a `feat/`, `fix/`, `docs/`, `chore/`, `refactor/` or
-`test/` branch. The maintainer reviews merges to `main`.
+`test/` branch. The maintainer reviews and manually merges PRs to `main`.
+Resolve review conversations and wait for `ci-gate` and `docker-gate` to pass.
+GitHub requires a PR for changes to `main`.
 
 ## Run the local checks
 
@@ -24,7 +26,7 @@ echo '{"op":"validate"}' | node mcp/pdp.mjs
 The suite uses the real Cedar engine. Live-only legacy tests skip when their
 local Keycloak installation or credentials are unavailable. Hosted CI also
 validates Terraform and checks Ansible syntax. Docker CI builds the headless,
-interactive and delegated profiles when relevant runtime inputs change.
+interactive and delegated profiles on every PR to `main`, including docs-only changes.
 [CI workflows](.github/workflows) · [Docker demo](docs/DOCKER.md)
 
 ## What to include in a change

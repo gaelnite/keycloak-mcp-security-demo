@@ -2,20 +2,9 @@ name: Docker demo
 
 on:
   pull_request:
-    paths:
-      - .github/workflows/docker-demo.yml
-      - cedar/**
-      - deploy/docker/**
-      - mcp/**
-      - scripts/verify-delegation.py
+    branches: [main]
   push:
     branches: [main]
-    paths:
-      - .github/workflows/docker-demo.yml
-      - cedar/**
-      - deploy/docker/**
-      - mcp/**
-      - scripts/verify-delegation.py
 
 permissions:
   contents: read
@@ -38,6 +27,8 @@ jobs:
       COMPOSE_FILE: ${{ matrix.compose }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - name: Validate the Compose graph
         run: docker compose config --quiet
       - name: Add a harmless local configuration marker
@@ -69,3 +60,18 @@ jobs:
       - name: Stop the demo
         if: always()
         run: docker compose stop
+
+  docker-gate:
+    if: ${{ always() }}
+    needs: [compose-smoke]
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Require all Docker profiles to pass
+        env:
+          COMPOSE_RESULT: ${{ needs.compose-smoke.result }}
+        run: |
+          if [ "$COMPOSE_RESULT" != "success" ]; then
+            echo "::error::The Docker smoke-test matrix did not succeed. Review its profile jobs."
+            exit 1
+          fi
