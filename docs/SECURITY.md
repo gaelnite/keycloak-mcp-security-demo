@@ -5,7 +5,8 @@ Its security question is whether a particular user, with a particular desktop
 grant, may perform one operation through an authenticated MCP workload.
 A Cedar permit authorizes dispatch. Keycloak still decides whether to serve
 the resulting Admin request. [Delegated demo](MCP-DELEGATION.md) ·
-[Threat model and verification evidence](THREAT-MODEL.md)
+[Threat model and verification evidence](THREAT-MODEL.md) ·
+[Security design decisions](decisions/README.md)
 
 ## Which profile demonstrates which property?
 
