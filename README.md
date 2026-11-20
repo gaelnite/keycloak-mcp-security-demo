@@ -1,8 +1,21 @@
 # Keycloak MCP security reference (experimental)
 
-This demo asks how a desktop user can delegate a narrow Keycloak Admin operation
-to an MCP server. It separates the user's grant, the workload's identity, the
-tool policy, and the authority of the token sent to Admin REST.
+## Purpose
+
+This demo shows how a Keycloak administrator can use a desktop assistant like
+Codex to carry out specific tasks in Keycloak. The administrator signs in and
+chooses what to allow, then can ask the assistant to look up a user or a
+registered application.
+
+The desktop client gets an OAuth access token for the MCP server with scopes
+the administrator selects from their available permissions. For each tool
+call, the server checks the token and uses Cedar to decide whether the call
+is allowed. It then authenticates to Keycloak with its own SPIFFE identity,
+issued by SPIRE, and exchanges the user's token for a separate, short-lived
+token with limited permissions for the Keycloak Admin REST API. A private
+gateway restricts which API requests can reach Keycloak. The demo's only
+write, changing the language preference of a disabled test account, also
+requires a separate, single-use approval.
 
 ![A delegated read goes from desktop sign-in to the MCP server, which checks Cedar, obtains a SPIRE identity, exchanges the grant at Keycloak, and calls Admin REST through a private gateway.](docs/assets/mcp-auth-flow.gif)
 
