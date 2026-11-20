@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="720" role="img" aria-labelledby="title desc">
+  <title id="title">Inside a delegated user lookup</title>
+  <desc id="desc">Seven numbered handoffs trace a user lookup from sign-in through policy, token exchange, the private gateway and the filtered response.</desc>
+  <rect x="0" y="0" width="1024" height="720" rx="0" fill="#0b1422" stroke="none" stroke-width="1" />
+  <text x="36" y="38" fill="#81dcf4" font-family="Menlo,monospace" font-weight="500" font-size="14">KEYCLOAK  /  get_user</text>
+  <text x="34" y="99" fill="#edf4fb" font-family="Helvetica Neue,Arial,sans-serif" font-weight="600" font-size="52">Inside a delegated user lookup</text>
+  <rect x="32" y="129" width="960" height="76" rx="8" fill="#132438" stroke="none" stroke-width="1" />
+  <circle cx="66" cy="167" r="17" fill="#253b4c" stroke="#81dcf4" />
+  <text text-anchor="middle" x="66" y="173" fill="#81dcf4" font-family="Helvetica Neue,Arial,sans-serif" font-weight="650" font-size="17">1</text>
+  <text x="102" y="173" fill="#edf4fb" font-family="Helvetica Neue,Arial,sans-serif" font-weight="600" font-size="19">Keycloak</text>
+  <path d="M218 167h24m-6 -5l6 5-6 5" fill="none" stroke="#81dcf4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+  <text x="262" y="173" fill="#edf4fb" font-family="Helvetica Neue,Arial,sans-serif" font-weight="600" font-size="19">Codex</text>
+  <text x="410" y="160" fill="#edf4fb" font-family="Helvetica Neue,Arial,sans-serif" font-weight="600" font-size="21">Sign in and select access</text>
+  <text x="410" y="186" fill="#b5c6d5" font-family="Helvetica Neue,Arial,sans-serif" font-weight="400" font-size="17">Keycloak issues Codex an MCP token with keycloak.users.read.</text>
+  <rect x="32" y="211" width="960" height="76" rx="8" fill="#0f1d2e" stroke="none" stroke-width="1" />
+  <circle cx="66" cy="249" r="17" fill="#253b4c" stroke="#81dcf4" />
+  <text text-anchor="middle" x="66" y="255" fill="#81dcf4" font-family="Helvetica Neue,Arial,sans-serif" font-weight="650" font-size="17">2</text>
+  <text x="102" y="255" fill="#edf4fb" font-family="Helvetica Neue,Arial,sans-serif" font-weight="600" font-size="19">Codex</text>
+  <path d="M218 249h24m-6 -5l6 5-6 5" fill="none" stroke="#81dcf4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+  <text x="262" y="255" fill="#edf4fb" font-family="Helvetica Neue,Arial,sans-serif" font-weight="600" font-size="19">MCP server</text>
+  <text x="410" y="242" fill="#edf4fb" font-family="Helvetica Neue,Arial,sans-serif" font-weight="600" font-size="21">Authorize the lookup</text>
+  <text x="410" y="268" fill="#b5c6d5" font-family="Helvetica Neue,Arial,sans-serif" font-weight="400" font-size="17">MCP verifies the user’s grant. Cedar checks the user, tool and realm.</text>
+  <rect x="32" y="293" width="960" height="76" rx="8" fill="#132438" stroke="none" stroke-width="1" />
+  <circle cx="66" cy="331" r="17" fill="#253b4c" stroke="#81dcf4" />
+  <text text-anchor="middle" x="66" y="337" fill="#81dcf4" font-family="Helvetica Neue,Arial,sans-serif" font-weight="650" font-size="17">3</text>
+  <text x="102" y="337" fill="#edf4fb" font-family="Helvetica Neue,Arial,sans-serif" font-weight="600" font-size="19">SPIRE</text>
+  <path d="M218 331h24m-6 -5l6 5-6 5" fill="none" stroke="#81dcf4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+  <text x="262" y="337" fill="#edf4fb" font-family="Helvetica Neue,Arial,sans-serif" font-weight="600" font-size="19">MCP server</text>
+  <text x="410" y="324" fill="#edf4fb" font-family="Helvetica Neue,Arial,sans-serif" font-weight="600" font-size="21">Identify the workload</text>
+  <text x="410" y="350" fill="#b5c6d5" font-family="Helvetica Neue,Arial,sans-serif" font-weight="400" font-size="17">SPIRE issues the credential MCP uses for user-read requests.</text>
+  <rect x="32" y="375" width="960" height="76" rx="8" fill="#0f1d2e" stroke="none" stroke-width="1" />
+  <circle cx="66" cy="413" r="17" fill="#253b4c" stroke="#81dcf4" />
+  <text text-anchor="middle" x="66" y="419" fill="#81dcf4" font-family="Helvetica Neue,Arial,sans-serif" font-weight="650" font-size="17">4</text>
+  <text x="102" y="419" fill="#edf4fb" font-family="Helvetica Neue,Arial,sans-serif" font-weight="600" font-size="19">MCP server</text>
+  <path d="M218 413h24m-6 -5l6 5-6 5" fill="none" stroke="#81dcf4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+  <text x="262" y="419" fill="#edf4fb" font-family="Helvetica Neue,Arial,sans-serif" font-weight="600" font-size="19">Keycloak</text>
+  <text x="410" y="406" fill="#edf4fb" font-family="Helvetica Neue,Arial,sans-serif" font-weight="600" font-size="21">Exchange the user token</text>
+  <text x="410" y="432" fill="#b5c6d5" font-family="Helvetica Neue,Arial,sans-serif" font-weight="400" font-size="17">Keycloak authenticates MCP and issues a short-lived Admin token.</text>
+  <rect x="32" y="457" width="960" height="76" rx="8" fill="#132438" stroke="none" stroke-width="1" />
+  <circle cx="66" cy="495" r="17" fill="#253b4c" stroke="#81dcf4" />
+  <text text-anchor="middle" x="66" y="501" fill="#81dcf4" font-family="Helvetica Neue,Arial,sans-serif" font-weight="650" font-size="17">5</text>
+  <text x="102" y="501" fill="#edf4fb" font-family="Helvetica Neue,Arial,sans-serif" font-weight="600" font-size="19">MCP server</text>
+  <path d="M218 495h24m-6 -5l6 5-6 5" fill="none" stroke="#81dcf4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+  <text x="262" y="501" fill="#edf4fb" font-family="Helvetica Neue,Arial,sans-serif" font-weight="600" font-size="19">Gateway</text>
+  <text x="410" y="488" fill="#edf4fb" font-family="Helvetica Neue,Arial,sans-serif" font-weight="600" font-size="21">Check the route</text>
+  <text x="410" y="514" fill="#b5c6d5" font-family="Helvetica Neue,Arial,sans-serif" font-weight="400" font-size="17">The private gateway checks the method, path and query.</text>
+  <rect x="32" y="539" width="960" height="76" rx="8" fill="#0f1d2e" stroke="none" stroke-width="1" />
+  <circle cx="66" cy="577" r="17" fill="#253b4c" stroke="#81dcf4" />
+  <text text-anchor="middle" x="66" y="583" fill="#81dcf4" font-family="Helvetica Neue,Arial,sans-serif" font-weight="650" font-size="17">6</text>
+  <text x="102" y="583" fill="#edf4fb" font-family="Helvetica Neue,Arial,sans-serif" font-weight="600" font-size="19">Gateway</text>
+  <path d="M218 577h24m-6 -5l6 5-6 5" fill="none" stroke="#81dcf4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+  <text x="262" y="583" fill="#edf4fb" font-family="Helvetica Neue,Arial,sans-serif" font-weight="600" font-size="19">Admin API</text>
+  <text x="410" y="570" fill="#edf4fb" font-family="Helvetica Neue,Arial,sans-serif" font-weight="600" font-size="21">Read the user</text>
+  <text x="410" y="596" fill="#b5c6d5" font-family="Helvetica Neue,Arial,sans-serif" font-weight="400" font-size="17">Keycloak checks delegated permissions and returns the record.</text>
+  <rect x="32" y="621" width="960" height="76" rx="8" fill="#132438" stroke="none" stroke-width="1" />
+  <circle cx="66" cy="659" r="17" fill="#253b4c" stroke="#91e6b8" />
+  <text text-anchor="middle" x="66" y="665" fill="#91e6b8" font-family="Helvetica Neue,Arial,sans-serif" font-weight="650" font-size="17">7</text>
+  <text x="102" y="665" fill="#edf4fb" font-family="Helvetica Neue,Arial,sans-serif" font-weight="600" font-size="19">MCP server</text>
+  <path d="M218 659h24m-6 -5l6 5-6 5" fill="none" stroke="#91e6b8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+  <text x="262" y="665" fill="#edf4fb" font-family="Helvetica Neue,Arial,sans-serif" font-weight="600" font-size="19">Codex</text>
+  <text x="410" y="652" fill="#edf4fb" font-family="Helvetica Neue,Arial,sans-serif" font-weight="600" font-size="21">Return the result</text>
+  <text x="410" y="678" fill="#b5c6d5" font-family="Helvetica Neue,Arial,sans-serif" font-weight="400" font-size="17">MCP sends only the permitted user fields back to Codex.</text>
+</svg>
