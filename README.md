@@ -31,6 +31,9 @@ requires a separate, single-use approval.
 2. **Tool decision.** MCP verifies the current access token and checks the issued
    scope and user entitlement. Cedar evaluates the verified principal, tool,
    and realm. The write also requires a fresh operator-signed approval.
+   Cedar lets the MCP server answer a question before it requests an Admin token:
+   may this user invoke this tool in this realm under the grant they selected?
+   [Why Cedar for tool authorization?](docs/decisions/0001-cedar-policy.md) ·
    [Cedar authorization](docs/AUTHZ.md) · [Threat model and tests](docs/THREAT-MODEL.md)
 3. **Workload and exchange.** SPIRE supplies a JWT-SVID for the selected
    capability's exchange client. Keycloak exchanges the human grant for a
