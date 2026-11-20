@@ -17,7 +17,7 @@ gateway restricts which API requests can reach Keycloak. The demo's only
 write, changing the language preference of a disabled test account, also
 requires a separate, single-use approval.
 
-![A delegated read goes from desktop sign-in to the MCP server, which checks Cedar, obtains a SPIRE identity, exchanges the grant at Keycloak, and calls Admin REST through a private gateway.](docs/assets/mcp-auth-flow.gif)
+[![Delegated user lookup in seven steps. Keycloak issues the user-read grant, MCP checks it with Cedar, SPIRE identifies MCP, and Keycloak exchanges the token. The private gateway forwards the read to the Admin REST API, and MCP returns the permitted user fields.](docs/assets/delegated-user-lookup.svg)](docs/MCP-DELEGATION.md)
 
 [Interactive guide](https://github.com/gaelnite/keycloak-mcp-security-demo/blob/main/docs/mcp-auth-evolution.html) · Open the HTML locally to trace an allowed read, an approved write, and a missing-scope denial.
 
