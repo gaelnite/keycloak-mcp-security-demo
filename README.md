@@ -1,5 +1,5 @@
 # Keycloak MCP security reference (experimental)
-[![CI](https://github.com/gaelnite/keycloak-mcp-security-demo/actions/workflows/WORKFLOW_FILE.yml/badge.svg?branch=BRANCH)](https://github.com/gaelnite/keycloak-mcp-security-demo/actions/workflows/WORKFLOW_FILE.yml)
+[![CI](https://github.com/gaelnite/keycloak-mcp-security-demo/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/gaelnite/keycloak-mcp-security-demo/actions/workflows/ci.yml)
 
 ## Purpose
 
