@@ -26,12 +26,35 @@ sys.path.insert(0, str(LAB / "mcp"))
 import gen_cedar  # noqa: E402
 import pep as pep_module  # noqa: E402
 import tool_registry  # noqa: E402
-from pep import CedarPep, Decision, PdpError, PepError, UserPrincipal  # noqa: E402
+from pep import CedarPep, ClientPrincipal, Decision, PdpError, PepError, UserPrincipal  # noqa: E402
 from tool_registry import ADMIN, READ, TOOLS, TOOLS_BY_NAME, USER_LOCALE, USERS_READ, WRITE, ToolSpec  # noqa: E402
 
 CEDAR = LAB / "cedar"
 POLICIES = CEDAR / "policies.cedar"
 ENTITIES = CEDAR / "entities.json"
+
+
+ISSUER = "https://keycloak.example/realms/lab"
+OTHER_ISSUER = "https://keycloak.example/realms/other"
+ALL_SCOPES = frozenset(scope for tool in TOOLS for scope in tool.scopes)
+READ_SCOPES = frozenset(tool.scopes[0] for tool in TOOLS if not tool.write)
+
+
+def client_principal(scopes: frozenset[str] = READ_SCOPES, *, realm: str = "lab", admin: bool = False) -> ClientPrincipal:
+    """A machine caller as its own token would describe it."""
+    return ClientPrincipal(ISSUER, "mcp-client", realm, scopes, frozenset(), admin)
+
+
+def user_principal(
+    subject: str = "desktop-user",
+    *,
+    scopes: frozenset[str] = READ_SCOPES,
+    roles: frozenset[str] = frozenset(),
+    realm: str = "lab",
+    admin: bool = False,
+) -> UserPrincipal:
+    """A human caller as its own token would describe it."""
+    return UserPrincipal(ISSUER, subject, "desktop-client", realm, scopes, roles, admin)
 
 
 def _tool(name: str) -> ToolSpec:
@@ -121,28 +144,43 @@ class CedarBundleTests(unittest.TestCase):
         self.assertNotIn("secret", text.lower())
         self.assertNotIn("like ", text, "policies must not glob-match raw strings")
 
-    def test_entities_cover_realms_principals_and_all_tools(self) -> None:
+    def test_the_store_is_the_tool_surface_plus_realms(self) -> None:
         entities = json.loads(ENTITIES.read_text())
         by_type: dict[str, list[dict]] = {}
         for entity in entities:
             by_type.setdefault(entity["uid"]["type"], []).append(entity)
-        self.assertEqual(len(by_type["KeycloakMCP::Realm"]), 2)
-        self.assertTrue(by_type["KeycloakMCP::User"])
-        self.assertTrue(by_type["KeycloakMCP::Client"])
-        tool_ids = {entity["uid"]["id"] for entity in by_type["KeycloakMCP::Tool"]}
-        self.assertEqual(tool_ids, {tool.name for tool in TOOLS})
-        cursor = next(e for e in by_type["KeycloakMCP::Client"] if e["uid"]["id"] == "mcp-cursor")
-        self.assertEqual(cursor["attrs"]["scopes"], gen_cedar._READ_SCOPES)
-        admin = next(e for e in by_type["KeycloakMCP::Client"] if e["uid"]["id"] == "mcp-admin")
-        self.assertTrue(admin["attrs"]["admin"])
-
-    def test_generated_entities_put_principals_in_their_realm(self) -> None:
-        entities = json.loads(ENTITIES.read_text())
-        alice = next(e for e in entities if e["uid"]["id"] == "alice")
         self.assertEqual(
-            alice["parents"],
-            [{"__entity": {"type": "KeycloakMCP::Realm", "id": "lab"}}],
+            set(by_type),
+            {"KeycloakMCP::Realm", "KeycloakMCP::Tool", "KeycloakMCP::Resource"},
         )
+        self.assertEqual({entity["uid"]["id"] for entity in by_type["KeycloakMCP::Realm"]}, set(gen_cedar.REALMS))
+        self.assertEqual(
+            {entity["uid"]["id"] for entity in by_type["KeycloakMCP::Tool"]},
+            {tool.name for tool in TOOLS},
+        )
+        self.assertEqual(
+            {entity["uid"]["id"] for entity in by_type["KeycloakMCP::Resource"]},
+            {f"realm:{realm}" for realm in gen_cedar.REALMS},
+        )
+        for tool, entity in zip(TOOLS, by_type["KeycloakMCP::Tool"], strict=True):
+            with self.subTest(tool=tool.name):
+                self.assertEqual(entity["attrs"]["requiredScope"], tool.scopes[0])
+                self.assertEqual(entity["attrs"]["tier"], tool.tier)
+                self.assertEqual(entity["attrs"]["extension"], tool.extension)
+                self.assertEqual(entity["attrs"]["write"], tool.write)
+
+    def test_no_principal_is_seeded(self) -> None:
+        """A caller is a runtime entity built from claims, so it must not be generatable.
+
+        If a `User` or `Client` ever appears here it becomes a second source of
+        authority, and regenerating the bundle would silently grant someone.
+        """
+        for entity in json.loads(ENTITIES.read_text()):
+            self.assertNotIn(
+                entity["uid"]["type"],
+                {"KeycloakMCP::User", "KeycloakMCP::Client"},
+                f"{entity['uid']['type']}::{entity['uid']['id']} must not be generated",
+            )
 
 
 class FakePdp:
@@ -180,8 +218,7 @@ class PepDecisionTests(unittest.TestCase):
         fake = FakePdp()
         decision = make_pep(fake).authorize(
             _tool("get_extension_inventory"),
-            principal_type="Client",
-            principal_id="mcp-claude",
+            principal=client_principal(),
             realm="lab",
             extensions=["orgs"],
         )
@@ -191,13 +228,12 @@ class PepDecisionTests(unittest.TestCase):
         request = fake.requests[0]
         self.assertEqual(request["action"]["id"], "Read")
         self.assertEqual(request["resource"]["id"], "get_extension_inventory")
-        self.assertEqual(request["principal"]["id"], "mcp-claude")
+        self.assertEqual(request["principal"]["id"], client_principal().id)
 
     def test_deny_is_returned_without_failing_closed(self) -> None:
         decision = make_pep(FakePdp(decision="deny")).authorize(
             _tool("get_extension_inventory"),
-            principal_type="Client",
-            principal_id="mcp-claude",
+            principal=client_principal(),
             realm="lab",
             extensions=[],
         )
@@ -209,8 +245,7 @@ class PepDecisionTests(unittest.TestCase):
         fake.error = PdpError("the Cedar PDP exceeded 500 ms")
         decision = make_pep(fake).authorize(
             _tool("get_extension_inventory"),
-            principal_type="Client",
-            principal_id="mcp-claude",
+            principal=client_principal(),
             realm="lab",
             extensions=[],
         )
@@ -224,8 +259,7 @@ class PepDecisionTests(unittest.TestCase):
             blocker.write_text("x")
             decision = make_pep(FakePdp(), audit_path=blocker / "audit.jsonl").authorize(
                 _tool("get_extension_inventory"),
-                principal_type="Client",
-                principal_id="mcp-claude",
+                principal=client_principal(),
                 realm="lab",
                 extensions=[],
             )
@@ -237,8 +271,7 @@ class PepDecisionTests(unittest.TestCase):
         pep = make_pep(fake)
         pep.authorize(
             _tool("set_user_locale"),
-            principal_type="Client",
-            principal_id="mcp-admin",
+            principal=client_principal(ALL_SCOPES, admin=True),
             realm="lab",
             extensions=["core"],
             writes_enabled=True,
@@ -254,8 +287,7 @@ class PepDecisionTests(unittest.TestCase):
         fake = FakePdp()
         decision = make_pep(fake).authorize(
             _tool("set_user_locale"),
-            principal_type="Client",
-            principal_id="mcp-admin",
+            principal=client_principal(ALL_SCOPES, admin=True),
             realm="lab",
             extensions=["core"],
             writes_enabled=True,
@@ -269,8 +301,7 @@ class PepDecisionTests(unittest.TestCase):
             audit = Path(directory) / "authz.jsonl"
             make_pep(FakePdp(), audit_path=audit).authorize(
                 _tool("get_extension_inventory"),
-                principal_type="Client",
-                principal_id="mcp-claude",
+                principal=client_principal(),
                 realm="lab",
                 extensions=[],
             )
@@ -307,8 +338,7 @@ class RealCedarTests(unittest.TestCase):
 
     def authorize(self, tool: str, **kwargs: object):
         parameters = {
-            "principal_type": "Client",
-            "principal_id": "mcp-claude",
+            "principal": client_principal(),
             "realm": "lab",
             "extensions": ["core"],
         }
@@ -326,27 +356,23 @@ class RealCedarTests(unittest.TestCase):
         self.assertIn("kc-deny-cross-realm", decision.reasons)
 
     def test_same_client_users_have_independent_role_and_scope_authority(self) -> None:
-        issuer, client = "https://keycloak.example/realms/lab", "same-desktop"
-        helpdesk = UserPrincipal(issuer, "helpdesk-1", client, "lab", frozenset({USERS_READ.scope}), frozenset({USERS_READ.role}))
-        no_role = UserPrincipal(issuer, "reassigned-1", client, "lab", helpdesk.scopes, frozenset())
-        no_scope = UserPrincipal(issuer, helpdesk.subject, client, "lab", frozenset(), helpdesk.roles)
+        helpdesk = user_principal("helpdesk-1", scopes=frozenset({USERS_READ.scope}), roles=frozenset({USERS_READ.role}))
+        no_role = user_principal("reassigned-1", scopes=helpdesk.scopes, roles=frozenset())
+        no_scope = user_principal(helpdesk.subject, scopes=frozenset(), roles=helpdesk.roles)
         self.assertNotEqual(helpdesk.id, no_role.id)
         self.assertEqual(helpdesk.id, no_scope.id)
-        self.assertTrue(self.authorize("list_users", user=helpdesk).allowed)
-        self.assertFalse(self.authorize("list_users", user=no_role).allowed)
-        self.assertFalse(self.authorize("list_users", user=no_scope).allowed)
-        self.assertFalse(self.authorize("get_extension_inventory", user=helpdesk).allowed)
-        self.assertIn("kc-deny-cross-realm", self.authorize("list_users", realm="other", user=helpdesk).reasons)
+        self.assertTrue(self.authorize("list_users", principal=helpdesk).allowed)
+        self.assertFalse(self.authorize("list_users", principal=no_role).allowed)
+        self.assertFalse(self.authorize("list_users", principal=no_scope).allowed)
+        self.assertFalse(self.authorize("get_extension_inventory", principal=helpdesk).allowed)
+        self.assertIn("kc-deny-cross-realm", self.authorize("list_users", realm="other", principal=helpdesk).reasons)
 
     def test_locale_scope_is_independent_and_approval_still_required(self) -> None:
-        user = UserPrincipal(
-            "https://keycloak.example/realms/lab", "fixture", "desktop", "lab",
-            frozenset({USER_LOCALE.scope}), frozenset({USER_LOCALE.role, USERS_READ.role}),
-        )
+        caller = user_principal("fixture", scopes=frozenset({USER_LOCALE.scope}), roles=frozenset({USER_LOCALE.role, USERS_READ.role}))
         approval = {"verified": True, "tool": "set_user_locale", "expiresIn": 60}
-        self.assertFalse(self.authorize("list_users", user=user).allowed)
-        self.assertFalse(self.authorize("set_user_locale", user=user, writes_enabled=True).allowed)
-        self.assertTrue(self.authorize("set_user_locale", user=user, writes_enabled=True, approval=approval).allowed)
+        self.assertFalse(self.authorize("list_users", principal=caller).allowed)
+        self.assertFalse(self.authorize("set_user_locale", principal=caller, writes_enabled=True).allowed)
+        self.assertTrue(self.authorize("set_user_locale", principal=caller, writes_enabled=True, approval=approval).allowed)
 
     def test_real_cedar_allow_with_an_evaluation_error_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -366,7 +392,7 @@ when { 9223372036854775807 + 1 == 0 };
 ''')
             with CedarPep(pdp_script=pdp) as checker:
                 decision = checker.authorize(
-                    _tool("list_users"), principal_type="Client", principal_id="mcp-claude", realm="lab", extensions=[],
+                    _tool("list_users"), principal=client_principal(READ_SCOPES | {USERS_READ.scope}), realm="lab", extensions=[],
                 )
         self.assertFalse(decision.allowed)
         self.assertTrue(decision.failed_closed)
@@ -374,15 +400,12 @@ when { 9223372036854775807 + 1 == 0 };
 
     def test_real_write_requires_enabled_and_approval(self) -> None:
         approval = {"verified": True, "tool": "set_user_locale", "expiresIn": 60}
-        user = UserPrincipal(
-            "https://keycloak.example/realms/lab", "fixture", "desktop", "lab",
-            frozenset({USER_LOCALE.scope}), frozenset({USER_LOCALE.role}),
-        )
-        disabled = self.authorize("set_user_locale", user=user, writes_enabled=False, approval=approval)
+        caller = user_principal("fixture", scopes=frozenset({USER_LOCALE.scope}), roles=frozenset({USER_LOCALE.role}))
+        disabled = self.authorize("set_user_locale", principal=caller, writes_enabled=False, approval=approval)
         self.assertIn("kc-deny-writes-disabled", disabled.reasons)
-        no_approval = self.authorize("set_user_locale", user=user, writes_enabled=True, approval=None)
+        no_approval = self.authorize("set_user_locale", principal=caller, writes_enabled=True, approval=None)
         self.assertFalse(no_approval.allowed)
-        approved = self.authorize("set_user_locale", user=user, writes_enabled=True, approval=approval)
+        approved = self.authorize("set_user_locale", principal=caller, writes_enabled=True, approval=approval)
         self.assertTrue(approved.allowed)
         self.assertIn("kc-write-set-user-locale", approved.reasons)
 
@@ -396,8 +419,7 @@ when { 9223372036854775807 + 1 == 0 };
         )
         decision = self.pep.authorize(
             unknown,
-            principal_type="Client",
-            principal_id="mcp-admin",
+            principal=client_principal(ALL_SCOPES, admin=True),
             realm="lab",
             extensions=[],
             tool_known=False,
@@ -479,8 +501,7 @@ class PdpRecoveryTests(unittest.TestCase):
     def authorize(self):
         return self.pep.authorize(
             _tool("get_extension_inventory"),
-            principal_type="Client",
-            principal_id="mcp-claude",
+            principal=client_principal(),
             realm="lab",
             extensions=["core"],
         )

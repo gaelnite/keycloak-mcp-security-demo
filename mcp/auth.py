@@ -288,35 +288,55 @@ class TokenClaims:
     audience: str
     roles: frozenset[str] = frozenset()
     interactive: bool = False
+    # Keycloak's own `realm_access.roles`, kept apart from `roles`: for a human token the
+    # entitlements are the issued `mcp_roles` claim, for a machine token they are the
+    # client's realm roles. Cedar's `principal.roles` reads whichever one applies.
+    realm_roles: frozenset[str] = frozenset()
 
     def allows(self, scope: str) -> bool:
         return scope in self.scopes
 
 
-def _jwks_ssl_trust() -> ssl.SSLContext | bool:
-    """TLS trust material for the JWKS fetch, chosen without httpx's env routing.
+def ssl_trust(ca_file: str | None = None) -> ssl.SSLContext | bool:
+    """TLS trust material for an outbound client that runs with `trust_env=False`.
 
-    `trust_env=False` on the client is what keeps an ambient HTTP(S)_PROXY and any
-    ~/.netrc credential away from this request - but httpx implements SSL_CERT_FILE
-    and SSL_CERT_DIR under that same flag, and otherwise falls back to certifi's
-    bundle. A private Keycloak CA arrives through SSL_CERT_FILE (the Docker demo
-    mounts it at /trust/edge-ca.pem), so those two variables are read here
-    explicitly: trust is selected by the deployment, routing never is. With neither
-    set, defer to httpx's own default rather than second-guessing it.
+    `trust_env=False` keeps an ambient HTTP(S)_PROXY and any ~/.netrc credential away
+    from these requests - but httpx implements SSL_CERT_FILE and SSL_CERT_DIR under that
+    same flag, and otherwise falls back to certifi's bundle. A private Keycloak CA
+    arrives through SSL_CERT_FILE (the Docker demo mounts it at /trust/edge-ca.pem), so
+    those variables are read here explicitly: trust is selected by the deployment,
+    routing never is. An explicitly named bundle wins, then the environment, then httpx's
+    own default. A bundle that cannot be loaded raises rather than silently trusting a
+    different issuer.
     """
-    for variable, keyword in (("SSL_CERT_FILE", "cafile"), ("SSL_CERT_DIR", "capath")):
-        value = os.environ.get(variable)
+    candidates = [("KC_MCP_ADMIN_CA_FILE/ssl_ca_bundle", ca_file, "cafile")]
+    candidates.append(("SSL_CERT_FILE", os.environ.get("SSL_CERT_FILE"), "cafile"))
+    candidates.append(("SSL_CERT_DIR", os.environ.get("SSL_CERT_DIR"), "capath"))
+    for label, value, keyword in candidates:
         if not value:
             continue
         try:
-            return ssl.create_default_context(**{keyword: value})
+            context = ssl.create_default_context(**{keyword: value})
         except OSError as exc:
-            raise TokenError(
-                f"Cannot load the signing-key trust material from {variable}: {exc}",
-                status=503,
-                code="server_error",
-            ) from exc
+            raise TokenError(f"Cannot load the TLS trust material from {label}: {exc}", status=503, code="server_error") from exc
+        context.minimum_version = ssl.TLSVersion.TLSv1_2
+        return context
     return True
+
+
+def realm_from_issuer(issuer: str) -> str:
+    """The realm path segment of an issuer URL, or "" if it is not a realm issuer.
+
+    Both `iss` and the realm reach us from the token, so the pair is checked here rather
+    than assumed: a caller from one realm must not reach another realm's tool.
+    """
+    parts = urlsplit(issuer)
+    marker = "/realms/"
+    if not parts.path.startswith(marker) or parts.path != marker + parts.path[len(marker) :].strip("/"):
+        return ""
+    return parts.path[len(marker) :]
+
+
 
 
 class JwksCache:
@@ -352,7 +372,7 @@ class JwksCache:
         self._max_bytes = max_bytes
         # Resolved once, at construction: a CA bundle the operator named must either
         # load or stop the server, never be quietly ignored mid-verification.
-        self._ssl = _jwks_ssl_trust()
+        self._ssl = ssl_trust()
         self._lock = asyncio.Lock()
         self._keys: dict[str, Any] = {}
         self._fetched_at = 0.0
@@ -538,7 +558,11 @@ class KeycloakTokenVerifier:
                 code="invalid_client",
             )
         realm = self.config.realm
+        issuer_realm = realm_from_issuer(claims["iss"])
+        if issuer_realm != realm:
+            raise TokenError("The access token was issued by a different realm than this server serves")
         roles = claims.get("realm_access", {}).get("roles") if isinstance(claims.get("realm_access"), dict) else []
+        realm_roles = frozenset(role for role in roles if isinstance(role, str)) if isinstance(roles, list) else frozenset()
         scopes = _scope_claims(claims)
         interactive = client_id in self.config.interactive_client_ids
         entitlements = frozenset()
@@ -568,6 +592,7 @@ class KeycloakTokenVerifier:
             audience=self.config.audience,
             roles=entitlements,
             interactive=interactive,
+            realm_roles=frozenset() if interactive else realm_roles,
         )
 
     async def aclose(self) -> None:

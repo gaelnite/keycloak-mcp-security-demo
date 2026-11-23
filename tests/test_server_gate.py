@@ -24,17 +24,19 @@ except (ImportError, ValueError):  # pragma: no cover - depends on the interpret
 if HAVE_MCP:
     import server
     from auth import TokenClaims, TokenError
-    from pep import Decision
+    from pep import ClientPrincipal, Decision, UserPrincipal
 
 
 class _RecordingPep:
     def __init__(self) -> None:
         self.calls = 0
+        self.last: dict = {}
         self.rejections: list[dict] = []
         self.audit_error: OSError | None = None
 
     def authorize(self, *args, **kwargs):
         self.calls += 1
+        self.last = kwargs
         return Decision("deny", reasons=("test-deny",))
 
     def audit_rejection(self, tool, principal_type, principal_id, realm, *, reason, detail,
@@ -58,15 +60,6 @@ class ServerGateTests(unittest.TestCase):
                 "KC_ALLOWED_CLIENT_IDS": "https://cimd.lab.local:8444/client-metadata.json",
             }
         )
-        cls.mapped_config = server.ServerConfig.from_env(
-            {
-                "KC_ISSUER": "https://kc.lab.local:8443/realms/lab",
-                "KC_AUDIENCE": "https://mcp.lab.local/mcp",
-                "KC_URL": "https://kc.lab.local:8443",
-                "KC_ALLOWED_CLIENT_IDS": "https://cimd.lab.local:8444/client-metadata.json",
-                "KC_MCP_CLIENT_ENTITY_MAP": '{"another-client":"mcp-claude"}',
-            }
-        )
 
     def setUp(self) -> None:
         self._old_runtime = server._RUNTIME
@@ -77,16 +70,28 @@ class ServerGateTests(unittest.TestCase):
         server._RUNTIME = self._old_runtime
         server._CLAIMS.set(None)
 
-    def claims(self, *, scopes, admin=False) -> TokenClaims:
+    def claims(
+        self,
+        *,
+        scopes,
+        admin=False,
+        roles=frozenset(),
+        realm_roles=frozenset(),
+        interactive=False,
+        client_id=None,
+    ) -> TokenClaims:
         return TokenClaims(
             subject="alice",
-            client_id="https://cimd.lab.local:8444/client-metadata.json",
+            client_id=client_id or "https://cimd.lab.local:8444/client-metadata.json",
             scopes=frozenset(scopes),
             realm="lab",
             admin=admin,
             expires_at=9_999_999_999,
             issuer=self.config.auth.issuer,
             audience=self.config.auth.audience,
+            roles=frozenset(roles),
+            realm_roles=frozenset(realm_roles),
+            interactive=interactive,
         )
 
     def test_missing_token_scope_is_denied_before_the_pep(self) -> None:
@@ -103,18 +108,52 @@ class ServerGateTests(unittest.TestCase):
         self.assertIn("keycloak.extensions.read", record["detail"])
         self.assertIsNone(record["jti"])
 
-    def test_unmapped_client_is_denied_and_audited(self) -> None:
-        self.pep = _RecordingPep()
-        server._RUNTIME = server.Runtime(config=self.mapped_config, pep=self.pep, admin=None)
-        server._CLAIMS.set(self.claims(scopes=["keycloak.extensions.read"]))
+    def test_a_machine_client_is_authorised_on_its_own_token(self) -> None:
+        """There is no client-to-entity map: the verified token is the principal.
+
+        The client id reaches Cedar as a runtime entity carrying the token's own scopes,
+        so an allowlisted client is judged by policy instead of by whether somebody
+        remembered to map it, and no seeded fixture can lend it authority it does not have.
+        """
+        client_id = "https://other.lab.local/client-metadata.json"
+        scopes = frozenset({"keycloak.extensions.read"})
+        server._CLAIMS.set(self.claims(scopes=scopes, client_id=client_id))
         result = asyncio.run(server._authorized_call(server.SPECS["get_extension_inventory"]))
-        self.assertIn("KC_MCP_CLIENT_ENTITY_MAP", result["error"])
-        self.assertEqual(self.pep.calls, 0)
-        self.assertEqual([record["reason"] for record in self.pep.rejections], ["client_unmapped"])
-        self.assertEqual(self.pep.rejections[0]["principal_type"], "Client")
+        self.assertEqual(self.pep.calls, 1)
+        principal = self.pep.last["principal"]
+        self.assertEqual(principal.entity_type, "Client")
         self.assertEqual(
-            self.pep.rejections[0]["principal"],
-            "https://cimd.lab.local:8444/client-metadata.json",
+            principal.id,
+            ClientPrincipal(self.config.auth.issuer, client_id, "lab", scopes, frozenset()).id,
+        )
+        self.assertEqual(principal.scopes, scopes)
+        self.assertIn("Cedar denied", result["error"])
+
+    def test_a_human_token_is_authorised_as_its_subject(self) -> None:
+        """An interactive token reaches Cedar as the human, with Keycloak's own roles.
+
+        `mcp_roles` decides which tools the server even offers (the entitlement gate
+        above the PEP); `realm_access.roles` is what Cedar sees, so a client-side claim
+        cannot impersonate a Keycloak role assignment.
+        """
+        server._CLAIMS.set(
+            self.claims(
+                scopes=["keycloak.users.read"],
+                roles=["mcp-users-read"],
+                realm_roles=["mcp-users-read"],
+                interactive=True,
+            )
+        )
+        asyncio.run(server._authorized_call(server.SPECS["list_users"]))
+        principal = self.pep.last["principal"]
+        self.assertEqual(principal.entity_type, "User")
+        self.assertEqual(principal.roles, frozenset({"mcp-users-read"}))
+        self.assertEqual(
+            principal.id,
+            UserPrincipal(
+                self.config.auth.issuer, "alice", principal.client_id, "lab",
+                frozenset({"keycloak.users.read"}), frozenset({"mcp-users-read"}),
+            ).id,
         )
 
     def test_invalid_path_argument_is_denied_and_audited_without_the_value(self) -> None:

@@ -55,19 +55,26 @@ tokens, arguments or approval artifacts.
 
 ### Where the entities come from
 
-`cedar/entities.json` describes the tool surface, and the fixture principals (alice, bob,
-the three desktop clients) exist so the offline tests have something to assert about.
-A live caller is not read from that file: the PEP sends its realm, roles and scopes with
-each request, built only from verified token claims, and `mcp/pdp.mjs` synthesises the
-principal entity, its realm and the realm being acted on. Authority of a real caller is
-therefore a property of the token, never of a fixture somebody kept up to date - or
-forgot to.
+`cedar/entities.json` contains realms, tools and realm-scoped resources, and no
+principals. A caller is described per request by the PEP, from claims the token verifier
+already checked: the realm that issued the token, its scopes, its realm roles, and
+whether those roles make it an admin. `mcp/pdp.mjs` turns those facts into the principal
+entity and parents it to its realm. Authority is therefore a property of the token, never
+of a row somebody kept up to date - or forgot to regenerate.
+
+That removes a config knob rather than adding one. `KC_MCP_CLIENT_ENTITY_MAP` used to
+rename a Keycloak client to a seeded Cedar entity; with no seeded clients there is nothing
+to rename, and an allowlisted client is judged on its own token. The allowlist in
+`KC_ALLOWED_CLIENT_IDS` still decides which clients are accepted at all.
 
 Two requests are refused rather than guessed at. Caller facts without a realm have no
-meaning. Facts naming an entity the bundle already defines - any principal, and any
-`Tool` - would redefine a policy input mid-decision, so they are rejected as a shadowing
-attempt instead of merged. A request with no caller facts still uses the bundle as
-written, which is how the fixtures are exercised.
+meaning: there would be no parent to attach, and a realm-less principal could satisfy
+`principal in context.resource.realm`. Facts naming an entity the bundle already defines
+would redefine a policy input mid-decision, so they are rejected as a shadowing attempt
+instead of merged - which is also why the generated store must stay principal-free
+(`tests/test_policies.py::test_no_principal_is_seeded`). The realm a request *acts on* is
+synthesised from the request context when the bundle has no such realm, so a cross-realm
+call reaches `kc-deny-cross-realm` instead of failing as a missing-entity error.
 
 ## Write and downstream boundaries
 

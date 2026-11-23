@@ -11,7 +11,6 @@
         "KC_URL": "https://localhost:8443",
         "KC_ISSUER": "https://localhost:8443/realms/lab",
         "KC_AUDIENCE": "https://localhost:8800/mcp",
-        "KC_MCP_CLIENT_ENTITY_MAP": "{\"mcp-workload\":\"mcp-claude\"}",
         "KC_ALLOWED_CLIENT_IDS_FILE": "/home/you/.config/keycloak-mcp/allowed-clients.txt",
         "KC_MCP_ACCESS_TOKEN_FILE": "/home/you/.config/keycloak-mcp/access-token",
         "KC_MCP_ENABLE_WRITES": "0",

@@ -76,11 +76,9 @@ const meta = {
   policyIds: Object.keys(staticPolicies).sort(),
 };
 
-// The runtime entity store carries only Tools. Everything about a caller is
-// supplied per request by the PEP from *verified* token claims, so the decision
-// cannot depend on a principal that someone remembered to seed into entities.json.
-// A request without matching facts keeps using the static store as-is: that is how
-// the offline fixtures (alice, bob) and the unknown-tool probe are evaluated.
+// The runtime entity store carries the tool surface. Everything about a caller is
+// supplied per request by the PEP from *verified* token claims, so a decision cannot
+// depend on a principal that someone remembered to seed into entities.json.
 const DYNAMIC_FACTS_KEY = new Map([
   ["KeycloakMCP::User", "user"],
   ["KeycloakMCP::Client", "client"],
@@ -100,53 +98,71 @@ function realmUid(id) {
   return { type: "KeycloakMCP::Realm", id };
 }
 
+function realmResourceUid(id) {
+  return { type: "KeycloakMCP::Resource", id: REALM_RESOURCE_PREFIX + id };
+}
+
+// The realm a request acts on arrives as Cedar's resource (`realm:<id>`) and is not
+// guaranteed to be in the store: realms are discovered at runtime from Keycloak, while
+// entities.json is generated from the tool registry. It has to exist anyway, or a
+// cross-realm attempt would fail as a Cedar evaluation error instead of reaching
+// kc-deny-cross-realm - and an evaluation error is a worse audit record than a denial.
+function contextRealmId(request) {
+  const resource = request.context && request.context.resource;
+  const uid = resource && resource.__entity;
+  if (
+    isEntityUid(uid) &&
+    uid.type === "KeycloakMCP::Resource" &&
+    uid.id.startsWith(REALM_RESOURCE_PREFIX) &&
+    uid.id.length > REALM_RESOURCE_PREFIX.length
+  ) {
+    return uid.id.slice(REALM_RESOURCE_PREFIX.length);
+  }
+  return undefined;
+}
+
 function requestEntities(request) {
   const factsKey = DYNAMIC_FACTS_KEY.get(request.principal && request.principal.type);
   const facts = factsKey === undefined ? undefined : request[factsKey];
-  if (facts === undefined) return entities;
-  if (!isEntityUid(request.principal) || typeof facts.attrs !== "object" || facts.attrs === null) {
-    throw new Error("invalid dynamic principal");
-  }
-  // Never let a request redefine a principal the bundle already knows: a static
-  // Tool, Realm or fixture entity stays exactly as the bundle defines it.
-  if (entities.some((entity) => entity.uid.type === request.principal.type && entity.uid.id === request.principal.id)) {
-    throw new Error("dynamic principal shadows a static entity");
-  }
-  // Two realms must exist for every dynamic request. `facts.realm` is the realm the
-  // *caller* belongs to (verified `iss`/realm on the wire). The realm *being acted on*
-  // arrives as the request resource, and both have to be in the store: if the target
-  // realm entity were missing, a cross-realm attempt would fail as a Cedar evaluation
-  // error instead of evaluating to kc-deny-cross-realm. They are usually the same
-  // entity, and one Set covers both cases.
   const realmIds = new Set();
-  const principalRealm = facts.realm;
-  if (typeof principalRealm !== "string" || principalRealm === "") {
-    throw new Error("dynamic principal without a realm");
+  const targetRealm = contextRealmId(request);
+  if (targetRealm !== undefined) realmIds.add(targetRealm);
+
+  if (facts !== undefined) {
+    if (!isEntityUid(request.principal) || typeof facts.attrs !== "object" || facts.attrs === null) {
+      throw new Error("invalid dynamic principal");
+    }
+    // Never let a request redefine an entity the bundle already knows: a static Tool,
+    // Realm or fixture principal stays exactly as the bundle defines it.
+    if (entities.some((entity) => entity.uid.type === request.principal.type && entity.uid.id === request.principal.id)) {
+      throw new Error("dynamic principal shadows a static entity");
+    }
+    // `facts.realm` is the realm the *caller* belongs to (verified `iss` on the wire),
+    // which is usually - but not always - the realm being acted on.
+    if (typeof facts.realm !== "string" || facts.realm === "") {
+      throw new Error("dynamic principal without a realm");
+    }
+    realmIds.add(facts.realm);
   }
-  realmIds.add(principalRealm);
-  const contextRealm = request.context && request.context.resource && request.context.resource.__entity;
-  if (
-    isEntityUid(contextRealm) &&
-    contextRealm.type === "KeycloakMCP::Resource" &&
-    contextRealm.id.startsWith(REALM_RESOURCE_PREFIX)
-  ) {
-    realmIds.add(contextRealm.id.slice(REALM_RESOURCE_PREFIX.length));
-  }
+
   const known = (uid) => entities.some((entity) => entity.uid.type === uid.type && entity.uid.id === uid.id);
+  if (facts === undefined && realmIds.size === 0) return entities;
   const dynamic = [...entities];
   for (const id of realmIds) {
     const realm = realmUid(id);
     if (!known(realm)) dynamic.push({ uid: realm, attrs: {}, parents: [] });
-    const target = { type: "KeycloakMCP::Resource", id: REALM_RESOURCE_PREFIX + id };
-    if (!known(target)) {
-      dynamic.push({ uid: target, attrs: { kind: "realm", realm: { __entity: realm } }, parents: [] });
+    const resource = realmResourceUid(id);
+    if (!known(resource)) {
+      dynamic.push({ uid: resource, attrs: { kind: "realm", realm: { __entity: realm } }, parents: [] });
     }
   }
-  dynamic.push({
-    uid: request.principal,
-    attrs: facts.attrs,
-    parents: [{ __entity: realmUid(principalRealm) }],
-  });
+  if (facts !== undefined) {
+    dynamic.push({
+      uid: request.principal,
+      attrs: facts.attrs,
+      parents: [{ __entity: realmUid(facts.realm) }],
+    });
+  }
   return dynamic;
 }
 

@@ -48,7 +48,7 @@ from auth import (
 from delegation import DelegatedAdmin, DelegationError, gateway_capability
 from generated_tool_wrappers import build_tool_functions
 from keycloak_admin import KeycloakAdmin
-from pep import CedarPep, PepError, UserPrincipal, pep_from_env
+from pep import CedarPep, ClientPrincipal, PepError, Principal, UserPrincipal, pep_from_env
 from server_config import ConfigError, ServerConfig
 from tool_handlers import TOOL_IMPLS, ValidationError, path_segment
 from tool_registry import LOCALE_FIXTURE_ID, LOCALES, TOOLS, ToolSpec
@@ -106,19 +106,35 @@ def current_token() -> str:
     return _STDIO_TOKEN
 
 
-def principal_for(claims: TokenClaims, config: ServerConfig) -> tuple[str, str] | None:
-    """Map a Keycloak client to a Cedar Client entity.
+def principal_for(claims: TokenClaims) -> Principal:
+    """The Cedar principal for a verified token, and nothing else.
 
-    When an entity map is configured, an unmapped client fails closed instead of
-    falling back to its raw id (which could match a stale entity in entities.json).
-    With no map at all, keep the development fallback to the raw client id.
+    A human whose token carries delegated authority is the subject themself; any other
+    accepted token is its own client. Realm, scopes, roles and the admin flag are the
+    claims the verifier checked - never a row in `entities.json` and never a mapping an
+    operator has to keep in sync with Keycloak. The realm the request *targets* is not
+    part of the principal: it goes to the PEP separately so cross-realm calls can be
+    compared against it.
     """
-    mapped = config.client_entity_map.get(claims.client_id)
-    if mapped is not None:
-        return "Client", mapped
-    if not config.client_entity_map:
-        return "Client", claims.client_id
-    return None
+    realm, scopes, roles = claims.realm, frozenset(claims.scopes), frozenset(claims.realm_roles)
+    if claims.interactive:
+        return UserPrincipal(
+            issuer=claims.issuer,
+            subject=claims.subject,
+            client_id=claims.client_id,
+            realm=realm,
+            scopes=scopes,
+            roles=roles,
+            admin=claims.admin,
+        )
+    return ClientPrincipal(
+        issuer=claims.issuer,
+        client_id=claims.client_id,
+        realm=realm,
+        scopes=scopes,
+        roles=roles,
+        admin=claims.admin,
+    )
 
 
 def _entitled(spec: ToolSpec, claims: TokenClaims) -> bool:
@@ -241,21 +257,11 @@ async def _authorized_call(spec: ToolSpec, **kwargs: Any) -> Any:
         return _error("locale must be en, de or fr", policy_id=spec.policy_id)
     runtime = _runtime()
     claims = current_claims()
-    user = None
-    if claims.interactive:
-        user = UserPrincipal(claims.issuer, claims.subject, claims.client_id, claims.realm, claims.scopes, claims.roles)
-    mapped = ("User", user.id) if user else principal_for(claims, runtime.config)
-    if mapped is None:
-        return _denial(
-            runtime,
-            spec,
-            "Client",
-            claims.client_id,
-            claims.realm,
-            "client_unmapped",
-            "this client is not mapped to a Cedar entity; add it to KC_MCP_CLIENT_ENTITY_MAP",
-        )
-    principal_type, principal_id = mapped
+    caller = principal_for(claims)
+    # A write is only ever performed on behalf of a human, so the user principal is
+    # tracked separately from the Cedar identity that authorises the call.
+    user = caller if isinstance(caller, UserPrincipal) else None
+    principal_type, principal_id = caller.entity_type, caller.id
     realm = str(kwargs.get("realm") or claims.realm)
     # T17: validate every Admin path argument before the approval verifier or
     # Cedar sees a target, so the authorized value and the value used in the
@@ -311,13 +317,11 @@ async def _authorized_call(spec: ToolSpec, **kwargs: Any) -> Any:
             return denied
     decision = runtime.pep.authorize(
         spec,
-        principal_type=principal_type,
-        principal_id=principal_id,
+        principal=caller,
         realm=realm,
         extensions=runtime.config.extensions,
         writes_enabled=runtime.config.writes_enabled,
         approval=approval,
-        **({"user": user} if user is not None else {}),
     )
     if not decision.allowed:
         return _error(
@@ -604,12 +608,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                         "policies": len(runtime.pep.meta.get("policyIds") or []),
                     },
                     "tools": registered,
-                    "unmapped_clients": sorted(
-                        client_id
-                        for client_id in config.auth.allowed_client_ids
-                        if client_id not in config.client_entity_map
-                        and client_id not in config.auth.interactive_client_ids
-                    ),
                 },
                 indent=2,
                 sort_keys=True,
