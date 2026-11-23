@@ -7,6 +7,8 @@ policy suite is tests/test_policies.py.
 from __future__ import annotations
 
 import asyncio
+import json
+import os
 import sys
 import time
 import unittest
@@ -16,6 +18,7 @@ LAB = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(LAB / "mcp"))
 
 try:
+    import httpx
     import jwt
     from cryptography.hazmat.primitives.asymmetric import rsa
 
@@ -24,11 +27,18 @@ except ImportError:  # pragma: no cover - depends on the interpreter
     HAVE_CRYPTO = False
 
 if HAVE_CRYPTO:
-    from auth import KeycloakAuthConfig, KeycloakTokenVerifier, TokenError
+    import auth
+    from auth import (
+        JwksCache,
+        KeycloakAuthConfig,
+        KeycloakTokenVerifier,
+        TokenError,
+    )
     from tool_registry import CLIENTS_READ, USERS_READ
 
 ISSUER = "https://kc.lab.example/realms/lab"
 CLIENT_URL = "https://clients.example/claude.json"
+JWKS_URL = ISSUER + "/protocol/openid-connect/certs"
 
 
 class _FakeJwks:
@@ -171,6 +181,107 @@ class TokenVerifierTests(unittest.TestCase):
         self.assertEqual(
             config.allowed_client_ids, frozenset({"https://clients.example/cb,state=1"})
         )
+
+
+class _EndlessStream(httpx.AsyncByteStream):
+    """A body that never ends and declares no length: only a running count stops it.
+
+    `bytes` for the sync path, `__aiter__` for the async one; `served` proves the
+    client stopped reading at the cap instead of buffering the whole document.
+    """
+
+    def __init__(self, chunk: bytes, chunks: int) -> None:
+        self.chunk = chunk
+        self.chunks = chunks
+        self.served = 0
+
+    async def __aiter__(self):
+        for index in range(self.chunks):
+            self.served = index + 1
+            yield self.chunk
+
+
+def _jwks_document(public_key) -> bytes:
+    jwk = json.loads(jwt.algorithms.RSAAlgorithm.to_jwk(public_key))
+    jwk.update({"kid": "k1", "alg": "RS256", "use": "sig"})
+    return json.dumps({"keys": [jwk]}).encode()
+
+
+@unittest.skipUnless(HAVE_CRYPTO, "httpx + PyJWT + cryptography are required")
+class JwksFetchTests(unittest.TestCase):
+    """The JWKS fetch must be bounded while streaming, and never leave the host."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        cls.public_key = cls.private_key.public_key()
+        cls.document = _jwks_document(cls.public_key)
+
+    def cache(self, handler, **kwargs) -> JwksCache:
+        return JwksCache(JWKS_URL, transport=httpx.MockTransport(handler), **kwargs)
+
+    def refresh(self, cache: JwksCache) -> None:
+        asyncio.run(cache.refresh())
+
+    def test_bound_is_one_source_and_smaller_than_a_token_cache_buster(self) -> None:
+        # The plan calls for a single assertable source of truth. MAX_JWKS_BYTES is
+        # that constant: the default of JwksCache(max_bytes=...) and the streaming
+        # read both derive from it.
+        self.assertEqual(auth.MAX_JWKS_BYTES, 256 * 1024)
+        self.assertEqual(
+            self.cache(lambda request: httpx.Response(200, content=b"{}"))._max_bytes,
+            auth.MAX_JWKS_BYTES,
+        )
+
+    def test_max_bytes_must_be_positive(self) -> None:
+        with self.assertRaises(ValueError):
+            self.cache(lambda request: httpx.Response(200, content=b"{}"), max_bytes=0)
+
+    def test_oversize_declared_content_length_is_refused(self) -> None:
+        cache = self.cache(
+            lambda request: httpx.Response(
+                200, headers={"content-length": str(auth.MAX_JWKS_BYTES + 1)}, stream=_EndlessStream(b"x", 1)
+            ),
+            max_bytes=1024,
+        )
+        with self.assertRaises(TokenError) as caught:
+            self.refresh(cache)
+        self.assertIn("large", str(caught.exception))
+
+    def test_oversize_streamed_body_is_refused_without_buffering_it(self) -> None:
+        # 4 MiB of unannounced chunks against a 64 KiB cap. The old `response.content`
+        # read buffered all 4 MiB before checking anything; a streaming bound must stop
+        # within one read chunk of the cap.
+        stream = _EndlessStream(b"x" * 4096, 1024)
+        cache = self.cache(
+            lambda request: httpx.Response(200, stream=stream), max_bytes=64 * 1024
+        )
+        with self.assertRaises(TokenError):
+            self.refresh(cache)
+        self.assertLessEqual(
+            stream.served * 4096, 64 * 1024 + auth.JWKS_CHUNK_BYTES
+        )
+
+    def test_previous_keys_survive_an_oversize_refresh(self) -> None:
+        mode = {"oversize": False}
+
+        def handler(request):
+            if mode["oversize"]:
+                return httpx.Response(200, stream=_EndlessStream(b"y" * 8192, 1024))
+            return httpx.Response(200, content=self.document)
+
+        cache = self.cache(handler, max_bytes=64 * 1024)
+        self.refresh(cache)
+        self.assertEqual(sorted(cache._keys), ["k1"])
+        mode["oversize"] = True
+        with self.assertRaises(TokenError):
+            self.refresh(cache)
+        # A failed refresh must never widen or corrupt access: the keys that were
+        # verified before the attack are still the keys in use.
+        self.assertEqual(sorted(cache._keys), ["k1"])
+        claims = asyncio.run(cache.get_key("k1"))
+        self.assertEqual(claims.key_id, "k1")
+
 
 
 if __name__ == "__main__":  # pragma: no cover
