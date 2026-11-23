@@ -60,10 +60,16 @@ class _RecordingAdmin:
 class _AllowPep:
     def __init__(self) -> None:
         self.realms: list[str] = []
+        self.rejections: list[dict] = []
 
     def authorize(self, spec, *, realm, **kwargs):
         self.realms.append(realm)
         return Decision("allow", reasons=("test-allow",))
+
+    def audit_rejection(self, tool, principal_type, principal_id, realm, *, reason, detail,
+                        approval_jti=None):
+        self.rejections.append({"tool": tool.name, "principal_type": principal_type,
+                                "realm": realm, "reason": reason, "detail": detail})
 
 
 @unittest.skipUnless(HAVE_MCP, "the MCP SDK is required for server tests")
@@ -201,6 +207,13 @@ class GateValidationTests(unittest.TestCase):
         self.assertIn("realm", result["error"])
         self.assertEqual(self.pep.realms, [])
         self.assertEqual(self.admin.calls, [])
+        # T17's check-then-use gate now leaves a forensic record too.
+        self.assertEqual([record["reason"] for record in self.pep.rejections], ["path_invalid"])
+        record = self.pep.rejections[0]
+        self.assertEqual(record["realm"], "lab", "the audit realm stays the authenticated one")
+        self.assertIn("realm", record["detail"])
+        self.assertNotIn("master/users/victim", str(self.pep.rejections))
+        self.assertNotIn("victim", str(self.pep.rejections))
 
     def test_crafted_user_id_rejected_before_pep_and_http(self):
         result = asyncio.run(
@@ -209,6 +222,9 @@ class GateValidationTests(unittest.TestCase):
         self.assertIn("user_id", result["error"])
         self.assertEqual(self.pep.realms, [])
         self.assertEqual(self.admin.calls, [])
+        self.assertEqual([record["reason"] for record in self.pep.rejections], ["path_invalid"])
+        self.assertIn("user_id", self.pep.rejections[0]["detail"])
+        self.assertNotIn("credentials", str(self.pep.rejections))
 
     def test_check_then_use_parity_for_clean_values(self):
         uuid = "f47ac10b-58cc-4372-a567-0e02b2c3d479"

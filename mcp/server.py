@@ -123,14 +123,71 @@ def _entitled(spec: ToolSpec, claims: TokenClaims) -> bool:
     return spec.capability is not None and spec.capability.role in claims.roles
 
 
-def _user_denial(
-    runtime: Runtime, user: UserPrincipal, spec: ToolSpec, reason: str, message: str
+def _denial_audit(
+    runtime: Runtime,
+    spec: ToolSpec,
+    principal_type: str,
+    principal_id: str,
+    realm: str,
+    reason: str,
+    detail: str,
+    *,
+    jti: str | None = None,
+) -> None:
+    """Append one redacted deny record for a pre-Cedar gate rejection.
+
+    Any principal type can use this. Only identifiers, a stable reason token and
+    a detail string built from field/rule text ever reach the audit log - never a
+    bearer token, an approval token or a rejected path value. `jti` is the public
+    single-use id of a *verified* approval, so it is present only once the
+    approval verifier has parsed the token.
+
+    Raises `OSError` when the audit sink is unavailable; callers fail closed.
+    """
+    runtime.pep.audit_rejection(
+        spec,
+        principal_type,
+        principal_id,
+        realm,
+        reason=reason,
+        detail=detail,
+        approval_jti=jti,
+    )
+
+
+def _denial(
+    runtime: Runtime,
+    spec: ToolSpec,
+    principal_type: str,
+    principal_id: str,
+    realm: str,
+    reason: str,
+    message: str,
+    *,
+    jti: str | None = None,
 ) -> dict[str, Any]:
+    """Audit a denial and build its error payload; a lost audit is itself a denial."""
     try:
-        runtime.pep.audit_rejection(spec, "User", user.id, user.realm, reason=reason, detail=message)
+        _denial_audit(
+            runtime, spec, principal_type, principal_id, realm, reason, message, jti=jti
+        )
     except OSError:
         return _error("Authorization audit unavailable", policy_id=spec.policy_id)
     return _error(message, policy_id=spec.policy_id)
+
+
+def _user_denial(
+    runtime: Runtime,
+    user: UserPrincipal,
+    spec: ToolSpec,
+    reason: str,
+    message: str,
+    *,
+    jti: str | None = None,
+) -> dict[str, Any]:
+    return _denial(
+        runtime, spec, "User", user.id, user.realm, reason, message, jti=jti
+    )
 
 
 def _runtime() -> Runtime:
@@ -170,7 +227,10 @@ def _delegated_approval(runtime: Runtime, user: UserPrincipal, spec: ToolSpec, a
     try:
         facts = verifier.verify(token, tool=spec.name, action=spec.tier, target=target, subject=user.id, realm=user.realm, locale=locale)
     except ApprovalError as exc:
-        return _user_denial(runtime, user, spec, "approval_rejected", str(exc)), None
+        # The verifier parsed and rejected a real approval, so its public jti is
+        # available and belongs in the record: SEC-04 requires every approval
+        # rejection to be traceable to the exact single-use token.
+        return _user_denial(runtime, user, spec, "approval_rejected", str(exc), jti=exc.jti), None
     return None, facts.to_pep()
 
 
@@ -184,9 +244,14 @@ async def _authorized_call(spec: ToolSpec, **kwargs: Any) -> Any:
         user = UserPrincipal(claims.issuer, claims.subject, claims.client_id, claims.realm, claims.scopes, claims.roles)
     mapped = ("User", user.id) if user else principal_for(claims, runtime.config)
     if mapped is None:
-        return _error(
+        return _denial(
+            runtime,
+            spec,
+            "Client",
+            claims.client_id,
+            claims.realm,
+            "client_unmapped",
             "this client is not mapped to a Cedar entity; add it to KC_MCP_CLIENT_ENTITY_MAP",
-            policy_id=spec.policy_id,
         )
     principal_type, principal_id = mapped
     realm = str(kwargs.get("realm") or claims.realm)
@@ -198,7 +263,18 @@ async def _authorized_call(spec: ToolSpec, **kwargs: Any) -> Any:
         if kwargs.get("user_id") is not None:
             path_segment(kwargs["user_id"], field="user_id")
     except ValidationError as exc:
-        return _error(str(exc), policy_id=spec.policy_id)
+        # `str(exc)` names the field and the rule; the rejected value itself is
+        # never echoed, and the audit realm stays the authenticated one so an
+        # unvalidated path argument cannot be written into the trail.
+        return _denial(
+            runtime,
+            spec,
+            principal_type,
+            principal_id,
+            claims.realm,
+            "path_invalid",
+            str(exc),
+        )
 
     if user is not None:
         if realm != user.realm:
@@ -215,9 +291,14 @@ async def _authorized_call(spec: ToolSpec, **kwargs: Any) -> Any:
         caller = _HTTP_CALLER.get()
         if caller is not None:
             caller.required_scopes = spec.scopes
-        return _error(
+        return _denial(
+            runtime,
+            spec,
+            principal_type,
+            principal_id,
+            realm,
+            "scope_missing",
             "the access token lacks the required scope(s): " + ", ".join(missing),
-            policy_id=spec.policy_id,
         )
     approval = None
     if spec.write:

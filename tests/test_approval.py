@@ -278,6 +278,7 @@ class _RecordingAuditPep:
     def __init__(self, decision=None) -> None:
         self.authorizations = []
         self.rejections = []
+        self.audit_error: OSError | None = None
 
     def authorize(self, *args, **kwargs):
         self.authorizations.append(kwargs)
@@ -285,8 +286,11 @@ class _RecordingAuditPep:
 
     def audit_rejection(self, tool, principal_type, principal_id, realm, *, reason, detail,
                         approval_jti=None):
+        if self.audit_error is not None:
+            raise self.audit_error
         self.rejections.append({"tool": tool.name, "reason": reason, "detail": detail,
-                                "jti": approval_jti})
+                                "principal_type": principal_type, "principal": principal_id,
+                                "realm": realm, "jti": approval_jti})
 
 
 @unittest.skipUnless(HAVE_MCP, "the MCP SDK is required for server wiring tests")
@@ -355,17 +359,28 @@ class ServerApprovalWiringTests(unittest.TestCase):
         self.assertIn("already been used", replay["error"])
         self.assertEqual(len(self.pep.authorizations), 1)  # Cedar not consulted twice
         self.assertEqual(self.pep.rejections[-1]["reason"], "approval_rejected")
+        # SEC-04: the rejection must be traceable to the exact single-use approval.
+        self.assertEqual(self.pep.rejections[-1]["jti"], "jti-1")
 
     def test_wildcard_denied_and_audited(self) -> None:
-        result = self.call(self.token(target="*"))
+        result = self.call(self.token(target="*", jti="jti-wild"))
         self.assertIn("wildcard approval rejected", result["error"])
         self.assertEqual(len(self.pep.authorizations), 0)
         self.assertEqual(self.pep.rejections[-1]["reason"], "approval_rejected")
+        self.assertEqual(self.pep.rejections[-1]["jti"], "jti-wild")
 
     def test_missing_token_denied_and_audited(self) -> None:
         result = self.call(None)
         self.assertIn("An operator approval is required", result["error"])
         self.assertEqual(self.pep.rejections[-1]["reason"], "approval_missing")
+        # No approval was presented, so there is no jti to attribute.
+        self.assertIsNone(self.pep.rejections[-1]["jti"])
+
+    def test_audit_failure_denies_and_never_allows(self) -> None:
+        self.pep.audit_error = OSError("audit log is read-only")
+        result = self.call(self.token(target="*"))
+        self.assertEqual(result["error"], "Authorization audit unavailable")
+        self.assertEqual(self.pep.authorizations, [])
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()
