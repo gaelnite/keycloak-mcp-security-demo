@@ -53,6 +53,22 @@ crash or malformed response denies the call. When file auditing is configured, a
 write failure also denies; records contain decision facts and policy IDs, not
 tokens, arguments or approval artifacts.
 
+### Where the entities come from
+
+`cedar/entities.json` describes the tool surface, and the fixture principals (alice, bob,
+the three desktop clients) exist so the offline tests have something to assert about.
+A live caller is not read from that file: the PEP sends its realm, roles and scopes with
+each request, built only from verified token claims, and `mcp/pdp.mjs` synthesises the
+principal entity, its realm and the realm being acted on. Authority of a real caller is
+therefore a property of the token, never of a fixture somebody kept up to date - or
+forgot to.
+
+Two requests are refused rather than guessed at. Caller facts without a realm have no
+meaning. Facts naming an entity the bundle already defines - any principal, and any
+`Tool` - would redefine a policy input mid-decision, so they are rejected as a shadowing
+attempt instead of merged. A request with no caller facts still uses the bundle as
+written, which is how the fixtures are exercised.
+
 ## Write and downstream boundaries
 
 Writes default to disabled. The delegated locale write requires an Ed25519
