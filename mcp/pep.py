@@ -6,6 +6,8 @@ Stdlib only so the offline tests run without the MCP SDK. The PEP:
   and a MAX_RESPONSE_BYTES bound enforced on every chunk read;
 * serialises the whole request/response round trip under one lock, correlates every
   response by requestId, and drains the PDP's stderr into a bounded tail;
+* `authorize_async()` runs that round trip on a worker thread so a slow PDP cannot
+  block the asyncio event loop;
 * on a deadline miss or framing violation denies that request, kills the PDP and
   lazily restarts it (with backoff) so the next request recovers; every failure
   path still denies;
@@ -17,6 +19,7 @@ It never logs tool arguments, tokens, client secrets or approval tokens.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import hashlib
 import json
@@ -329,6 +332,18 @@ class CedarPep:
                 failed_closed=True,
             )
         return decision
+
+    async def authorize_async(self, tool: ToolSpec, **kwargs: Any) -> Decision:
+        """Run one decision off the event loop.
+
+        `authorize()` is a blocking critical section: it writes to the PDP pipe,
+        waits on it with `select()` until the deadline, and holds the request lock
+        the whole time. Called directly from `async def _authorized_call()` it would
+        stall every other MCP session in this process for up to `self.timeout`
+        seconds per tool call. The synchronous form stays the public API - the
+        offline tests and the stdio path both call it directly.
+        """
+        return await asyncio.to_thread(self.authorize, tool, **kwargs)
 
     @staticmethod
     def _decision(response: Mapping[str, Any]) -> Decision:

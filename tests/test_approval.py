@@ -283,6 +283,9 @@ class _RecordingAuditPep:
         self.authorizations.append(kwargs)
         return Decision("deny", reasons=("test-deny",))
 
+    async def authorize_async(self, *args, **kwargs):
+        return self.authorize(*args, **kwargs)
+
     def audit_rejection(self, tool, principal_type, principal_id, realm, *, reason, detail,
                         approval_jti=None):
         if self.audit_error is not None:
