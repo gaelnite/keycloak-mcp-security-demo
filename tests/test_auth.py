@@ -284,5 +284,30 @@ class JwksFetchTests(unittest.TestCase):
 
 
 
+    def test_fetch_does_not_inherit_an_ambient_proxy(self) -> None:
+        # A proxy picked up from the environment would put a third party between the
+        # MCP server and its issuer. MockTransport cannot show a proxy being used, so
+        # assert the two things httpx actually acts on: trust_env and the proxy mounts.
+        cache = self.cache(lambda request: httpx.Response(200, content=self.document))
+        names = (
+            "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY",
+            "http_proxy", "https_proxy", "all_proxy",
+        )
+        previous = {name: os.environ.get(name) for name in names}
+        for name in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"):
+            os.environ[name] = "http://proxy.invalid:3128"
+        try:
+            client = asyncio.run(cache._http())
+            self.assertFalse(client.trust_env)
+            self.assertEqual(client._mounts, {})
+        finally:
+            for name, value in previous.items():
+                if value is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = value
+        asyncio.run(cache.aclose())
+
+
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

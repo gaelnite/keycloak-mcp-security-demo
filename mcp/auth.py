@@ -334,6 +334,12 @@ class JwksCache:
                 timeout=self._timeout,
                 transport=self._transport,
                 follow_redirects=False,
+                # The URL is HTTPS-only by construction (`__init__` rejects any other
+                # scheme) and redirects are off, so nothing about this request may come
+                # from the environment either: with transport=None, httpx would honour
+                # HTTP(S)_PROXY/ALL_PROXY - handing an issuer-selecting request to a
+                # stray corporate proxy - and could pick up a ~/.netrc credential.
+                trust_env=False,
                 headers={"Accept": "application/json", "User-Agent": "keycloak-mcp/0.1"},
             )
         return self._client
