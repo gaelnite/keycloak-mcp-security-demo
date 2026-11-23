@@ -57,6 +57,11 @@ KC_MCP_ACCESS_TOKEN_FILE=/secure/path/access-token \
 | `KC_MCP_AUDIT_LOG` | Unset | Optional redacted JSONL decision log, created with mode `0600`. |
 | `KC_CEDAR_TIMEOUT_MS` | `500` (range 500–2,000) | PDP deadline; timeout or PDP error denies. |
 
+The JWKS fetch and the Admin API client both run with `trust_env=False`, so no ambient
+proxy or `~/.netrc` reaches a request that carries a bearer token. An explicitly installed
+CA is still honoured: `SSL_CERT_FILE` and `SSL_CERT_DIR` are read directly and passed as
+the trust store, which is how the demo verifies its own edge certificate.
+
 The [delegated profile](MCP-DELEGATION.md) additionally requires an explicit
 private Admin URL, pinned CA, SPIRE Workload API socket and executable. Its
 locale write requires a durable replay database and short, resource-bound
