@@ -443,6 +443,14 @@ STUB_CASES = {
     "    } else process.stdout.write(answer);\n",
     "oversize": "    if (bump() === 1) process.stdout.write(\"x\".repeat(2 * 1024 * 1024));\n"
     "    else process.stdout.write(answer);\n",
+    # The case the newline-guarded cap used to miss: the response crosses
+    # MAX_RESPONSE_BYTES in the very chunk that also terminates the line, so the
+    # old `b"\n" not in buffer` guard never fired. The bytes are split across two
+    # writes because a raw pipe read returns at most 64 KiB at a time.
+    "oversize_with_newline": "    if (bump() === 1) {\n"
+    "      process.stdout.write(\"x\".repeat(1024 * 1024 - 10));\n"
+    "      setTimeout(() => process.stdout.write(\"y\".repeat(20) + \"\\n\"), 100);\n"
+    "    } else process.stdout.write(answer);\n",
     "trailing_bytes": "    if (bump() === 1) process.stdout.write(answer + answer);\n"
     "    else process.stdout.write(answer);\n",
     "exit_after_answer": "    bump();\n"
@@ -506,6 +514,14 @@ class PdpRecoveryTests(unittest.TestCase):
 
     def test_oversized_response_denied_and_recovers(self) -> None:
         self.make_pep("oversize")
+        self.assert_denied(self.authorize(), "1048576 bytes")
+        self.assertTrue(self.authorize().allowed)
+
+    def test_oversized_newline_terminated_response_denied_and_recovers(self) -> None:
+        # The cap guard sat behind `b"\n" not in buffer`, so a single chunk that
+        # oversizes *and* terminates the line left the loop and was returned for
+        # parsing. The bound is now checked on every chunk, before the newline test.
+        self.make_pep("oversize_with_newline")
         self.assert_denied(self.authorize(), "1048576 bytes")
         self.assertTrue(self.authorize().allowed)
 

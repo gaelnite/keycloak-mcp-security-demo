@@ -2,7 +2,8 @@
 
 Stdlib only so the offline tests run without the MCP SDK. The PEP:
 * maps a verified Keycloak token + tool spec to a Cedar request;
-* calls the local Node PDP (cedar-wasm) over JSON lines with a hard 500 ms deadline;
+* calls the local Node PDP (cedar-wasm) over JSON lines with a hard 500 ms deadline
+  and a MAX_RESPONSE_BYTES bound enforced on every chunk read;
 * on a deadline miss or framing violation denies that request, kills the PDP and
   lazily restarts it (with backoff) so the next request recovers; every failure
   path still denies;
@@ -56,7 +57,7 @@ class _DeadlineExceeded(Exception):
 
 
 class _ResponseTooLarge(Exception):
-    """Internal: the PDP streamed more than MAX_RESPONSE_BYTES without a newline."""
+    """Internal: the PDP produced more than MAX_RESPONSE_BYTES of response bytes."""
 
 
 @dataclass(frozen=True)
@@ -339,11 +340,15 @@ class CedarPep:
         return response
 
     def _read_line(self, proc: subprocess.Popen[bytes], timeout_s: float) -> bytes:
-        """Read one newline-delimited response, deadline-bounded.
+        """Read one newline-delimited response, deadline-bounded and size-bounded.
 
         The pipes are raw (bufsize=0), so select() and read() see exactly the same
         bytes; a partial line can never block past the deadline. readline() on a
         buffered text stream could hang forever on an unterminated partial line.
+
+        The deadline and the size bound are control-dependent on the same select
+        loop: every read is bounded by `remaining`, and every chunk is measured
+        against MAX_RESPONSE_BYTES before the loop decides the line is complete.
         """
         stdout = proc.stdout
         assert stdout is not None  # noqa: S101 - type narrowing; _request guards the process
@@ -365,12 +370,21 @@ class CedarPep:
             if not chunk:
                 raise PdpError(f"the Cedar PDP exited: {self._stderr_tail()}")
             buffer.extend(chunk)
-            if b"\n" not in buffer and len(buffer) > MAX_RESPONSE_BYTES:
+            # The size bound is checked on every chunk, before the newline test.
+            # Guarding it with `b"\n" not in buffer` let a single chunk that both
+            # exceeds MAX_RESPONSE_BYTES and terminates the line leave the loop and
+            # return the oversized payload for parsing.
+            if len(buffer) > MAX_RESPONSE_BYTES:
                 raise _ResponseTooLarge()
         newline = buffer.find(b"\n")
-        if buffer[newline + 1:]:
+        tail = buffer[newline + 1:]
+        if tail:
             # More than one response per request is a framing violation; the stream
             # is untrustworthy, so kill the PDP (the budgeted restart fixes framing).
+            if len(tail) > MAX_RESPONSE_BYTES:
+                # A post-newline flood is a size violation first: bound it with the
+                # same limit instead of trusting the tail length.
+                raise _ResponseTooLarge()
             self.close()
             raise PdpError("the Cedar PDP streamed trailing bytes after the response")
         return bytes(buffer[:newline])
