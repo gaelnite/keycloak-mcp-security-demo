@@ -4,6 +4,8 @@ Stdlib only so the offline tests run without the MCP SDK. The PEP:
 * maps a verified Keycloak token + tool spec to a Cedar request;
 * calls the local Node PDP (cedar-wasm) over JSON lines with a hard 500 ms deadline
   and a MAX_RESPONSE_BYTES bound enforced on every chunk read;
+* serialises the whole request/response round trip under one lock, correlates every
+  response by requestId, and drains the PDP's stderr into a bounded tail;
 * on a deadline miss or framing violation denies that request, kills the PDP and
   lazily restarts it (with backoff) so the next request recovers; every failure
   path still denies;
@@ -174,6 +176,9 @@ class CedarPep:
             maxlen=max(1, STDERR_TAIL_BYTES // STDERR_CHUNK_BYTES)
         )
         self._stderr_lock = threading.Lock()
+        # Serialises the whole PDP round trip. Reentrant: _request -> _restart ->
+        # _start -> the startup ping re-enters _request on the same thread.
+        self._io_lock = threading.RLock()
         self._start()
 
     # -- lifecycle -------------------------------------------------------
@@ -355,49 +360,57 @@ class CedarPep:
         # on the Node side.
         request_id = uuid.uuid4().hex
         payload = {**payload, "requestId": request_id}
-        if self._proc is None or self._proc.poll() is not None:
-            # Violation or crash: respawn under the restart budget, then retry once.
-            self._restart()
-        proc = self._proc
-        if proc is None or proc.stdin is None or proc.stdout is None:
-            raise PdpError("the Cedar PDP process is not running")
-        timeout_s = self.timeout if timeout is None else timeout
-        try:
-            proc.stdin.write(json.dumps(payload).encode("utf-8") + b"\n")
-            proc.stdin.flush()
-        except OSError as exc:
-            self.close()
-            raise PdpError(f"cannot write to the Cedar PDP: {exc}") from exc
-        try:
-            line = self._read_line(proc, timeout_s)
-        except _DeadlineExceeded:
-            # Kills the wedged PDP; the next request restarts it (budgeted).
-            self.close()
-            raise PdpError(f"the Cedar PDP exceeded {timeout_s * 1000:.0f} ms") from None
-        except _ResponseTooLarge:
-            self.close()
-            raise PdpError(
-                f"the Cedar PDP response exceeded {MAX_RESPONSE_BYTES} bytes"
-            ) from None
-        try:
-            response = json.loads(line)
-        except json.JSONDecodeError as exc:
-            raise PdpError(f"the Cedar PDP returned malformed JSON: {exc}") from exc
-        if not isinstance(response, dict) or not response.get("ok"):
-            error = response.get("error") if isinstance(response, dict) else None
-            detail = (
-                (response.get("detail") or response.get("errors"))
-                if isinstance(response, dict)
-                else response
-            )
-            raise PdpError(f"Cedar PDP refused ({error}): {detail}")
-        if response.get("requestId") != request_id:
-            # An absent or foreign id means the stream is not answering this
-            # request, so the payload cannot be trusted either way: treat it as a
-            # framing violation and let the budgeted restart resynchronise.
-            self.close()
-            raise PdpError("the Cedar PDP response did not match the request")
-        return response
+        # The write, the deadline-bounded read, the decode, the correlation test and
+        # the kill-on-violation below form ONE critical section. Without it,
+        # concurrent authorize() calls interleave on a single stream - one caller
+        # reads a peer's response - and several can spend the restart budget or steal
+        # the same lazy restart. The lock lives here rather than in authorize() so
+        # the CedarPep.__new__ test doubles, which replace _request outright, keep
+        # working without a lock attribute.
+        with self._io_lock:
+            if self._proc is None or self._proc.poll() is not None:
+                # Violation or crash: respawn under the restart budget, then retry.
+                self._restart()
+            proc = self._proc
+            if proc is None or proc.stdin is None or proc.stdout is None:
+                raise PdpError("the Cedar PDP process is not running")
+            timeout_s = self.timeout if timeout is None else timeout
+            try:
+                proc.stdin.write(json.dumps(payload).encode("utf-8") + b"\n")
+                proc.stdin.flush()
+            except OSError as exc:
+                self.close()
+                raise PdpError(f"cannot write to the Cedar PDP: {exc}") from exc
+            try:
+                line = self._read_line(proc, timeout_s)
+            except _DeadlineExceeded:
+                # Kills the wedged PDP; the next request restarts it (budgeted).
+                self.close()
+                raise PdpError(f"the Cedar PDP exceeded {timeout_s * 1000:.0f} ms") from None
+            except _ResponseTooLarge:
+                self.close()
+                raise PdpError(
+                    f"the Cedar PDP response exceeded {MAX_RESPONSE_BYTES} bytes"
+                ) from None
+            try:
+                response = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise PdpError(f"the Cedar PDP returned malformed JSON: {exc}") from exc
+            if not isinstance(response, dict) or not response.get("ok"):
+                error = response.get("error") if isinstance(response, dict) else None
+                detail = (
+                    (response.get("detail") or response.get("errors"))
+                    if isinstance(response, dict)
+                    else response
+                )
+                raise PdpError(f"Cedar PDP refused ({error}): {detail}")
+            if response.get("requestId") != request_id:
+                # An absent or foreign id means the stream is not answering this
+                # request, so the payload cannot be trusted either way: treat it as a
+                # framing violation and let the budgeted restart resynchronise.
+                self.close()
+                raise PdpError("the Cedar PDP response did not match the request")
+            return response
 
     def _read_line(self, proc: subprocess.Popen[bytes], timeout_s: float) -> bytes:
         """Read one newline-delimited response, deadline-bounded and size-bounded.

@@ -14,6 +14,7 @@ from __future__ import annotations
 import shutil
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -125,6 +126,40 @@ class StderrDrainTests(StubPepCase):
         self.assertIn(marker, tail)
         self.assertLessEqual(len(tail), STDERR_TAIL_LIMIT)
         self.assertTrue(tail.endswith(marker))
+
+
+class ConcurrencyTests(StubPepCase):
+    def test_concurrent_callers_receive_their_own_responses(self) -> None:
+        # One PDP, one pipe, eight callers. The stub names the principal it was
+        # asked about, so a crossed stream shows up as a mismatched reason rather
+        # than as a lost exception; with the request/response section unserialised
+        # this fails (foreign requestId, or trailing bytes from a peer's answer).
+        pep = self.stub_pep(delay=40, identity=True)
+        principals = [f"client-{index}" for index in range(8)]
+        reasons: dict[str, tuple[str, ...]] = {}
+        failures: list[BaseException] = []
+
+        def worker(principal_id: str) -> None:
+            try:
+                decision = self.authorize(pep, principal_id=principal_id)
+            except BaseException as exc:  # pragma: no cover - the PEP must not raise
+                failures.append(exc)
+                return
+            reasons[principal_id] = decision.reasons if decision.allowed else ("denied:" + "|".join(decision.errors),)
+
+        threads = [threading.Thread(target=worker, args=(principal,)) for principal in principals]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=20)
+        self.assertEqual([thread for thread in threads if thread.is_alive()], [])
+        self.assertEqual(failures, [])
+        self.assertEqual(sorted(reasons), sorted(principals))
+        for principal_id, got in reasons.items():
+            self.assertEqual(got, (f"stub:{principal_id}",))
+        # Serialisation is not just "no exception": a correct stream never trips the
+        # violation path, so the PDP must not have been restarted at all.
+        self.assertEqual(pep._restarts, [])
 
 
 if __name__ == "__main__":  # pragma: no cover
