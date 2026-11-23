@@ -21,10 +21,11 @@ import logging
 import os
 import sys
 import time
+from collections.abc import Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any
 
 import httpx
 from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
@@ -50,7 +51,8 @@ from keycloak_admin import KeycloakAdmin
 from pep import CedarPep, PepError, UserPrincipal, pep_from_env
 from server_config import ConfigError, ServerConfig
 from tool_handlers import TOOL_IMPLS, ValidationError, path_segment
-from tool_registry import LOCALE_FIXTURE_ID, LOCALES, TOOLS, TOOLS_BY_NAME as SPECS, ToolSpec
+from tool_registry import LOCALE_FIXTURE_ID, LOCALES, TOOLS, ToolSpec
+from tool_registry import TOOLS_BY_NAME as SPECS
 
 DEFAULT_PORT = 8766
 ADMIN_CHECK_PATH = "/__delegated_admin_check"
@@ -67,7 +69,7 @@ _CLAIMS: ContextVar[TokenClaims | None] = ContextVar("kc_mcp_claims", default=No
 _HTTP_CALLER: ContextVar[HttpCaller | None] = ContextVar("kc_mcp_http_caller", default=None)
 _STDIO_CLAIMS: TokenClaims | None = None
 _STDIO_TOKEN: str | None = None
-_RUNTIME: "Runtime | None" = None
+_RUNTIME: Runtime | None = None
 
 log = logging.getLogger("keycloak-mcp")
 

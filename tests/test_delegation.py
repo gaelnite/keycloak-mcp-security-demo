@@ -16,7 +16,14 @@ if HAVE_MCP:
     from cryptography.hazmat.primitives.asymmetric import ec
 
     from auth import KeycloakAuthConfig, TokenClaims
-    from delegation import ACCESS_TOKEN_TYPE, DelegatedAdmin, DelegationConfig, DelegationError, gateway_capability, operation_for
+    from delegation import (
+        ACCESS_TOKEN_TYPE,
+        DelegatedAdmin,
+        DelegationConfig,
+        DelegationError,
+        gateway_capability,
+        operation_for,
+    )
     from tool_registry import CLIENTS_READ, LOCALE_FIXTURE_ID, TOOLS_BY_NAME, USER_LOCALE, USERS_READ
 
 ISSUER = "https://localhost:49448/realms/lab"

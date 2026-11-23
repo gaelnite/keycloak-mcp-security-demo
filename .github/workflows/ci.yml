@@ -12,13 +12,19 @@ permissions:
 jobs:
   unit-tests:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.12 is security-only upstream, so it no longer gets regression fixes
+        # for the interpreter the demo is developed against.
+        python-version: ["3.14", "3.15"]
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python-version }}
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
@@ -26,6 +32,10 @@ jobs:
         run: |
           pip install -r mcp/requirements.txt
           cd mcp && npm ci --no-audit --no-fund
+      - name: Lint with ruff
+        run: |
+          pip install ruff==0.17.6
+          ruff check --output-format=github mcp tests
       - name: Run unit tests (includes real Cedar evaluations)
         run: python -m unittest discover -s tests -t . -v
 
@@ -35,6 +45,9 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
       - uses: actions/setup-node@v4
         with:
           node-version: "22"

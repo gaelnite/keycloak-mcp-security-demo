@@ -8,9 +8,10 @@ import re
 import ssl
 import subprocess
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 from urllib.parse import parse_qs, urlsplit
 from uuid import UUID
 
@@ -101,7 +102,10 @@ class DelegationConfig:
 
 def fetch_svid(executable: str, socket: str, spiffe_id: str, audience: str) -> str:
     try:
-        response = subprocess.run(
+        # S603: argv-list exec (no shell) of a path that DelegationConfig.from_env
+        # already validated as absolute and a regular file; every other argument is
+        # a constant or a validated trust-domain/capability derived string.
+        response = subprocess.run(  # noqa: S603
             [executable, "api", "fetch", "jwt", "-socketPath", socket, "-audience", audience,
              "-spiffeID", spiffe_id, "-output", "json"],
             stdin=subprocess.DEVNULL, capture_output=True, check=True, timeout=6,

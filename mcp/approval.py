@@ -18,11 +18,13 @@ import sqlite3
 import stat
 import threading
 import time
+from collections.abc import Mapping
 from contextlib import closing
 from dataclasses import dataclass
-from typing import Any, Mapping
+from typing import Any
 
 import jwt
+
 
 class ApprovalError(Exception):
     def __init__(self, message: str, *, jti: str | None = None) -> None:
@@ -74,9 +76,8 @@ class SqliteJtiStore:
                     raise ApprovalError("The approval replay database must be a private regular file")
             finally:
                 os.close(handle)
-            with closing(sqlite3.connect(path, timeout=0.5)) as connection:
-                with connection:
-                    connection.execute("CREATE TABLE IF NOT EXISTS used (jti TEXT PRIMARY KEY, expires REAL NOT NULL)")
+            with closing(sqlite3.connect(path, timeout=0.5)) as connection, connection:
+                connection.execute("CREATE TABLE IF NOT EXISTS used (jti TEXT PRIMARY KEY, expires REAL NOT NULL)")
         except (OSError, sqlite3.Error) as exc:
             raise ApprovalError("Could not initialize the approval replay database") from exc
 
@@ -124,7 +125,7 @@ class ApprovalVerifier:
         self.jti_store = jti_store if jti_store is not None else JtiStore(clock=clock)
 
     @classmethod
-    def from_env(cls, env: Mapping[str, str] | None = None) -> "ApprovalVerifier | None":
+    def from_env(cls, env: Mapping[str, str] | None = None) -> ApprovalVerifier | None:
         values = dict(os.environ if env is None else env)
         path = (values.get("KC_MCP_APPROVAL_PUBLIC_KEY_FILE") or "").strip()
         if not path:

@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Mapping
+from typing import Any
 from urllib.parse import urlparse
 
 from approval import ApprovalError, ApprovalVerifier, SqliteJtiStore
@@ -45,7 +46,7 @@ class ServerConfig:
     delegation: DelegationConfig | None = None
 
     @classmethod
-    def from_env(cls, env: Mapping[str, str] | None = None) -> "ServerConfig":
+    def from_env(cls, env: Mapping[str, str] | None = None) -> ServerConfig:
         values = dict(os.environ if env is None else env)
         auth = KeycloakAuthConfig.from_env(values)
         base_url = _https_base(values.get("KC_URL") or "")

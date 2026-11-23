@@ -5,8 +5,8 @@ from __future__ import annotations
 import base64
 import hashlib
 import secrets
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Sequence
 from urllib.parse import parse_qs, urlencode, urlsplit
 
 import httpx

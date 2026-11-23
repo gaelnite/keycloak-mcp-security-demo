@@ -306,12 +306,12 @@ class RealCedarTests(unittest.TestCase):
         cls.pep.close()
 
     def authorize(self, tool: str, **kwargs: object):
-        parameters = dict(
-            principal_type="Client",
-            principal_id="mcp-claude",
-            realm="lab",
-            extensions=["core"],
-        )
+        parameters = {
+            "principal_type": "Client",
+            "principal_id": "mcp-claude",
+            "realm": "lab",
+            "extensions": ["core"],
+        }
         parameters.update(kwargs)
         return self.pep.authorize(_tool(tool), **parameters)  # type: ignore[arg-type]
 
@@ -492,7 +492,7 @@ class PdpRecoveryTests(unittest.TestCase):
         self.assertIn(needle, " ".join(decision.errors))
 
     def test_timeout_denies_once_then_recovers(self) -> None:
-        pep = self.make_pep("slow_once")
+        self.make_pep("slow_once")
         self.assert_denied(self.authorize(), "exceeded 500 ms")
         recovered = self.authorize()
         self.assertTrue(recovered.allowed, msg=str(recovered.errors))
@@ -500,17 +500,17 @@ class PdpRecoveryTests(unittest.TestCase):
         self.assertEqual(recovered.bundle_hash, "0" * 64)
 
     def test_partial_line_is_bounded_and_recovers(self) -> None:
-        pep = self.make_pep("partial_line")
+        self.make_pep("partial_line")
         self.assert_denied(self.authorize(), "exceeded 500 ms")
         self.assertTrue(self.authorize().allowed)
 
     def test_oversized_response_denied_and_recovers(self) -> None:
-        pep = self.make_pep("oversize")
+        self.make_pep("oversize")
         self.assert_denied(self.authorize(), "1048576 bytes")
         self.assertTrue(self.authorize().allowed)
 
     def test_trailing_bytes_are_a_framing_violation(self) -> None:
-        pep = self.make_pep("trailing_bytes")
+        self.make_pep("trailing_bytes")
         self.assert_denied(self.authorize(), "trailing bytes")
         self.assertTrue(self.authorize().allowed)
 
@@ -528,7 +528,7 @@ class PdpRecoveryTests(unittest.TestCase):
         self.assertTrue(recovered.allowed, msg=str(recovered.errors))
 
     def test_flapping_pdp_backs_off_but_denies(self) -> None:
-        pep = self.make_pep("always_slow")
+        self.make_pep("always_slow")
         last = None
         for _ in range(pep_module.MAX_RESTARTS_IN_WINDOW + 2):
             last = self.authorize()
