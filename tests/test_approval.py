@@ -284,7 +284,7 @@ class _RecordingAuditPep:
         return Decision("deny", reasons=("test-deny",))
 
     def audit_rejection(self, tool, principal_type, principal_id, realm, *, reason, detail,
-                        approval_jti=None):
+                        approval_jti=None, client_id=None):
         if self.audit_error is not None:
             raise self.audit_error
         self.rejections.append({"tool": tool.name, "reason": reason, "detail": detail,

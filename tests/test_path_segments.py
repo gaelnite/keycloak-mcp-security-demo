@@ -67,7 +67,7 @@ class _AllowPep:
         return Decision("allow", reasons=("test-allow",))
 
     def audit_rejection(self, tool, principal_type, principal_id, realm, *, reason, detail,
-                        approval_jti=None):
+                        approval_jti=None, client_id=None):
         self.rejections.append({"tool": tool.name, "principal_type": principal_type,
                                 "realm": realm, "reason": reason, "detail": detail})
 

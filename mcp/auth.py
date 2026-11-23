@@ -592,7 +592,11 @@ class KeycloakTokenVerifier:
             audience=self.config.audience,
             roles=entitlements,
             interactive=interactive,
-            realm_roles=frozenset() if interactive else realm_roles,
+            # Keycloak's realm roles are the Cedar input for a caller of either kind:
+            # a user gets them through groups (`demo-helpdesk` -> `mcp-users-read`), a
+            # machine through client-scope role mappings. `mcp_roles` below stays the
+            # MCP-specific entitlement claim, which gates discovery, not policy.
+            realm_roles=realm_roles,
         )
 
     async def aclose(self) -> None:

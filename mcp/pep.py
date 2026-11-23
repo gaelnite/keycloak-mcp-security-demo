@@ -365,7 +365,7 @@ class CedarPep:
                 failed_closed=True,
             )
         try:
-            self._audit(tool, principal.entity_type, principal.id, realm, decision)
+            self._audit(tool, principal, realm, decision)
         except OSError as exc:
             return Decision(
                 decision="deny",
@@ -487,8 +487,7 @@ class CedarPep:
     def _audit(
         self,
         tool: ToolSpec,
-        principal_type: str,
-        principal_id: str,
+        principal: Principal,
         realm: str,
         decision: Decision,
     ) -> None:
@@ -500,8 +499,12 @@ class CedarPep:
             "policyId": tool.policy_id,
             "tier": tool.tier,
             "extension": tool.extension,
-            "principalType": principal_type,
-            "principal": principal_id,
+            "principalType": principal.entity_type,
+            # The entity id is a hash of issuer and identity, which keeps a subject
+            # stable across realms but says nothing on its own: the client the token
+            # was issued to is what an investigator needs to attribute a decision.
+            "principal": principal.id,
+            "clientId": principal.client_id,
             "realm": realm,
             "decision": decision.decision,
             "reasons": list(decision.reasons),
@@ -528,12 +531,15 @@ class CedarPep:
         reason: str,
         detail: str,
         approval_jti: str | None = None,
+        client_id: str | None = None,
     ) -> None:
         """Append a redacted deny record for a pre-Cedar gate rejection.
 
         Used by the approval gate (SEC-04): replay and wildcard denials must
         leave a forensic trail even though no Cedar decision was made. The
         approval token itself never appears; `approval_jti` is a public id.
+        `client_id` names the token's client where one is known, matching the
+        `clientId` a Cedar decision record carries.
         """
         if self.audit_path is None:
             return
@@ -554,6 +560,8 @@ class CedarPep:
         }
         if approval_jti:
             record["approvalJti"] = approval_jti
+        if client_id:
+            record["clientId"] = client_id
         data = (json.dumps(record, sort_keys=True) + "\n").encode("utf-8")
         self.audit_path.parent.mkdir(parents=True, exist_ok=True)
         descriptor = os.open(

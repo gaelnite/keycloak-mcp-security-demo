@@ -151,6 +151,7 @@ def _denial_audit(
     detail: str,
     *,
     jti: str | None = None,
+    client_id: str | None = None,
 ) -> None:
     """Append one redacted deny record for a pre-Cedar gate rejection.
 
@@ -170,6 +171,7 @@ def _denial_audit(
         reason=reason,
         detail=detail,
         approval_jti=jti,
+        client_id=client_id,
     )
 
 
@@ -183,11 +185,20 @@ def _denial(
     message: str,
     *,
     jti: str | None = None,
+    client_id: str | None = None,
 ) -> dict[str, Any]:
     """Audit a denial and build its error payload; a lost audit is itself a denial."""
     try:
         _denial_audit(
-            runtime, spec, principal_type, principal_id, realm, reason, message, jti=jti
+            runtime,
+            spec,
+            principal_type,
+            principal_id,
+            realm,
+            reason,
+            message,
+            jti=jti,
+            client_id=client_id,
         )
     except OSError:
         return _error("Authorization audit unavailable", policy_id=spec.policy_id)
@@ -204,7 +215,15 @@ def _user_denial(
     jti: str | None = None,
 ) -> dict[str, Any]:
     return _denial(
-        runtime, spec, "User", user.id, user.realm, reason, message, jti=jti
+        runtime,
+        spec,
+        "User",
+        user.id,
+        user.realm,
+        reason,
+        message,
+        jti=jti,
+        client_id=user.client_id,
     )
 
 
@@ -257,11 +276,10 @@ async def _authorized_call(spec: ToolSpec, **kwargs: Any) -> Any:
         return _error("locale must be en, de or fr", policy_id=spec.policy_id)
     runtime = _runtime()
     claims = current_claims()
-    caller = principal_for(claims)
+    actor = principal_for(claims)
     # A write is only ever performed on behalf of a human, so the user principal is
     # tracked separately from the Cedar identity that authorises the call.
-    user = caller if isinstance(caller, UserPrincipal) else None
-    principal_type, principal_id = caller.entity_type, caller.id
+    user = actor if isinstance(actor, UserPrincipal) else None
     realm = str(kwargs.get("realm") or claims.realm)
     # T17: validate every Admin path argument before the approval verifier or
     # Cedar sees a target, so the authorized value and the value used in the
@@ -277,11 +295,12 @@ async def _authorized_call(spec: ToolSpec, **kwargs: Any) -> Any:
         return _denial(
             runtime,
             spec,
-            principal_type,
-            principal_id,
+            actor.entity_type,
+            actor.id,
             claims.realm,
             "path_invalid",
             str(exc),
+            client_id=claims.client_id,
         )
 
     if user is not None:
@@ -302,11 +321,12 @@ async def _authorized_call(spec: ToolSpec, **kwargs: Any) -> Any:
         return _denial(
             runtime,
             spec,
-            principal_type,
-            principal_id,
+            actor.entity_type,
+            actor.id,
             realm,
             "scope_missing",
             "the access token lacks the required scope(s): " + ", ".join(missing),
+            client_id=claims.client_id,
         )
     approval = None
     if spec.write:
@@ -317,7 +337,7 @@ async def _authorized_call(spec: ToolSpec, **kwargs: Any) -> Any:
             return denied
     decision = runtime.pep.authorize(
         spec,
-        principal=caller,
+        principal=actor,
         realm=realm,
         extensions=runtime.config.extensions,
         writes_enabled=runtime.config.writes_enabled,

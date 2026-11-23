@@ -312,6 +312,8 @@ class PepDecisionTests(unittest.TestCase):
         self.assertEqual(record["tool"], "get_extension_inventory")
         self.assertEqual(record["policyId"], "kc-read-get-extension-inventory")
         self.assertEqual(len(record["bundleHash"]), 64)
+        # The principal id is a digest, so the record must also name the client.
+        self.assertEqual(record["clientId"], "mcp-client")
         self.assertNotIn("search", text)
         self.assertNotIn("realm=", text)
 

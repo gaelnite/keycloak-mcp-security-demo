@@ -49,7 +49,7 @@ class RecordingPep:
         return Decision("allow" if realm == "lab" else "deny", reasons=("fixture-policy",))
 
     def audit_rejection(self, tool, principal_type, principal_id, realm, *, reason, detail,
-                        approval_jti=None):
+                        approval_jti=None, client_id=None):
         self.rejections.append({"tool": tool.name, "reason": reason, "detail": detail})
 
 

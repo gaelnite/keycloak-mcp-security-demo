@@ -40,12 +40,12 @@ class _RecordingPep:
         return Decision("deny", reasons=("test-deny",))
 
     def audit_rejection(self, tool, principal_type, principal_id, realm, *, reason, detail,
-                        approval_jti=None):
+                        approval_jti=None, client_id=None):
         if self.audit_error is not None:
             raise self.audit_error
         self.rejections.append({"tool": tool.name, "principal_type": principal_type,
                                 "principal": principal_id, "realm": realm, "reason": reason,
-                                "detail": detail, "jti": approval_jti})
+                                "detail": detail, "jti": approval_jti, "client_id": client_id})
 
 
 @unittest.skipUnless(HAVE_MCP, "the MCP SDK is required for server gate tests")
@@ -93,6 +93,43 @@ class ServerGateTests(unittest.TestCase):
             realm_roles=frozenset(realm_roles),
             interactive=interactive,
         )
+
+    def test_a_human_principal_carries_keycloak_roles_not_mcp_capabilities(self) -> None:
+        """`realm_access.roles` decide policy; `mcp_roles` decides what is offered.
+
+        The demo grants a helpdesk user `mcp-users-read` through a group and its tool
+        capability through a consented client scope. Confusing the two claims either
+        widens policy to whatever a token was consented for, or - as first written -
+        leaves every human with no Cedar roles at all and denies the read the demo
+        advertises.
+        """
+        claims = TokenClaims(
+            subject="demo-helpdesk",
+            client_id="mcp-desktop",
+            scopes=frozenset({"keycloak.users.read"}),
+            realm="lab",
+            admin=False,
+            expires_at=9_999_999_999,
+            issuer=self.config.auth.issuer,
+            audience=self.config.auth.audience,
+            roles=frozenset({"mcp-users-read"}),  # the `mcp_roles` capability claim
+            realm_roles=frozenset(),              # the group-given realm role, below
+            interactive=True,
+        )
+        self.assertTrue(claims.interactive)
+        self.assertEqual(server.principal_for(claims).roles, frozenset())
+        granted = replace(claims, realm_roles=frozenset({"mcp-users-read"}))
+        principal = server.principal_for(granted)
+        self.assertIsInstance(principal, UserPrincipal)
+        self.assertEqual(principal.roles, frozenset({"mcp-users-read"}))
+        self.assertFalse(principal.admin)
+
+    def test_a_pre_cedar_denial_names_the_client_behind_the_principal(self) -> None:
+        server._CLAIMS.set(self.claims(scopes=[], client_id="mcp-desktop"))
+        asyncio.run(server._authorized_call(server.SPECS["list_users"]))
+        rejection = self.pep.rejections[-1]
+        self.assertEqual(rejection["reason"], "scope_missing")
+        self.assertEqual(rejection["client_id"], "mcp-desktop")
 
     def test_missing_token_scope_is_denied_before_the_pep(self) -> None:
         server._CLAIMS.set(self.claims(scopes=[]))
