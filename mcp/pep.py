@@ -14,18 +14,19 @@ It never logs tool arguments, tokens, client secrets or approval tokens.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
 import select
 import shutil
 import subprocess
-import sys
 import time
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 from tool_registry import ADMIN, READ, WRITE, ToolSpec
 
@@ -100,7 +101,7 @@ class UserPrincipal:
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    return datetime.now(UTC).isoformat(timespec="seconds")
 
 
 def _approval_facts(approval: Mapping[str, Any] | None) -> tuple[bool, str]:
@@ -161,7 +162,9 @@ class CedarPep:
     # -- lifecycle -------------------------------------------------------
     def _start(self) -> None:
         try:
-            self._proc = subprocess.Popen(
+            # S603: argv-list exec (no shell) of `shutil.which("node")` against a
+            # script path validated as a regular file in __init__.
+            self._proc = subprocess.Popen(  # noqa: S603
                 [self._node, str(self._script)],
                 cwd=str(self._script.parent),
                 stdin=subprocess.PIPE,
@@ -209,12 +212,10 @@ class CedarPep:
             proc.wait()
         for stream in (proc.stdout, proc.stderr):
             if stream is not None:
-                try:
+                with contextlib.suppress(OSError):
                     stream.close()
-                except OSError:
-                    pass
 
-    def __enter__(self) -> "CedarPep":
+    def __enter__(self) -> CedarPep:
         return self
 
     def __exit__(self, *exc_info: object) -> None:
@@ -345,7 +346,7 @@ class CedarPep:
         buffered text stream could hang forever on an unterminated partial line.
         """
         stdout = proc.stdout
-        assert stdout is not None
+        assert stdout is not None  # noqa: S101 - type narrowing; _request guards the process
         buffer = bytearray()
         deadline = time.monotonic() + timeout_s
         while True:

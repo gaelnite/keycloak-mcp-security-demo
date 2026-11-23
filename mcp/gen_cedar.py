@@ -16,7 +16,7 @@ import json
 import sys
 from pathlib import Path
 
-from tool_registry import ADMIN, CAPABILITIES, EXTENSIONS, READ, TOOLS, WRITE, ToolSpec
+from tool_registry import ADMIN, CAPABILITIES, EXTENSIONS, READ, TOOLS, WRITE
 
 HERE = Path(__file__).resolve().parent
 CEDAR = HERE.parent / "cedar"

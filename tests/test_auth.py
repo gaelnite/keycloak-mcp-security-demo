@@ -17,7 +17,6 @@ sys.path.insert(0, str(LAB / "mcp"))
 
 try:
     import jwt
-    from cryptography.hazmat.primitives import serialization
     from cryptography.hazmat.primitives.asymmetric import rsa
 
     HAVE_CRYPTO = True

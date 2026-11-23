@@ -81,15 +81,13 @@ class PathSegmentUnitTests(unittest.TestCase):
 
     def test_crafted_values_are_rejected(self):
         for value in CRAFTED:
-            with self.subTest(value=value):
-                with self.assertRaises(tool_handlers.ValidationError):
-                    tool_handlers.path_segment(value, field="realm")
+            with self.subTest(value=value), self.assertRaises(tool_handlers.ValidationError):
+                tool_handlers.path_segment(value, field="realm")
 
     def test_empty_non_string_and_oversized_are_rejected(self):
         for value in ("", None, 123, "x" * 256):
-            with self.subTest(value=repr(value)[:30]):
-                with self.assertRaises(tool_handlers.ValidationError):
-                    tool_handlers.path_segment(value, field="realm")
+            with self.subTest(value=repr(value)[:30]), self.assertRaises(tool_handlers.ValidationError):
+                tool_handlers.path_segment(value, field="realm")
 
 
 @unittest.skipUnless(HAVE_MCP, "the MCP SDK is required for server tests")
@@ -105,9 +103,8 @@ class ImplInterpolationTests(unittest.TestCase):
             (tool_handlers.list_users, {"realm": "lab?x=1"}),
         ]
         for impl, kwargs in cases:
-            with self.subTest(impl=impl.__name__, **kwargs):
-                with self.assertRaises(tool_handlers.ValidationError):
-                    asyncio.run(impl(admin=self.admin, **kwargs))
+            with self.subTest(impl=impl.__name__, **kwargs), self.assertRaises(tool_handlers.ValidationError):
+                asyncio.run(impl(admin=self.admin, **kwargs))
         self.assertEqual(self.admin.calls, [])
 
     def test_valid_ids_produce_exactly_the_expected_segments(self):

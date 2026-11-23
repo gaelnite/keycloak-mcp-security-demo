@@ -348,13 +348,15 @@ with patch.object(server, "KeycloakTokenVerifier", verifier), patch.object(
         )
 
         with anyio.fail_after(10):
-            async with stdio_client(parameters) as (reader, writer):
-                async with ClientSession(reader, writer) as client:
-                    result = await client.initialize()
-                    self.assertEqual(result.protocolVersion, PROTOCOL)
-                    tools = await client.list_tools()
-                    self.assertIn("get_extension_inventory", [tool.name for tool in tools.tools])
-                    allowed = await client.call_tool("get_extension_inventory")
-                    self.assertIn("core", allowed.content[0].text)
-                    denied = await client.call_tool("list_users", {"realm": "lab"})
-                    self.assertIn("lacks the required scope", denied.content[0].text)
+            async with (
+                stdio_client(parameters) as (reader, writer),
+                ClientSession(reader, writer) as client,
+            ):
+                result = await client.initialize()
+                self.assertEqual(result.protocolVersion, PROTOCOL)
+                tools = await client.list_tools()
+                self.assertIn("get_extension_inventory", [tool.name for tool in tools.tools])
+                allowed = await client.call_tool("get_extension_inventory")
+                self.assertIn("core", allowed.content[0].text)
+                denied = await client.call_tool("list_users", {"realm": "lab"})
+                self.assertIn("lacks the required scope", denied.content[0].text)

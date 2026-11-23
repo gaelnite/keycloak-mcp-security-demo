@@ -15,8 +15,9 @@ import asyncio
 import os
 import re
 import time
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Any, Callable, Iterable, Mapping
+from typing import Any
 from urllib.parse import urlparse, urlsplit
 
 import httpx
@@ -126,7 +127,7 @@ class ProtectedResource:
     url_path: str
 
     @classmethod
-    def parse(cls, value: str) -> "ProtectedResource":
+    def parse(cls, value: str) -> ProtectedResource:
         error = (
             "KC_MCP_RESOURCE_URL must be a canonical HTTPS URL with a lowercase host "
             "and an optional path of unreserved segments"
@@ -177,7 +178,7 @@ class KeycloakAuthConfig:
     interactive_client_ids: frozenset[str] = frozenset()
 
     @classmethod
-    def from_env(cls, env: Mapping[str, str] | None = None) -> "KeycloakAuthConfig":
+    def from_env(cls, env: Mapping[str, str] | None = None) -> KeycloakAuthConfig:
         values = dict(os.environ if env is None else env)
         issuer = _https_url((values.get("KC_ISSUER") or "").strip(), "KC_ISSUER")
         audience = (values.get("KC_AUDIENCE") or "").strip()
