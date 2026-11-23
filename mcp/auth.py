@@ -16,6 +16,7 @@ import asyncio
 import json
 import os
 import re
+import ssl
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -292,6 +293,32 @@ class TokenClaims:
         return scope in self.scopes
 
 
+def _jwks_ssl_trust() -> ssl.SSLContext | bool:
+    """TLS trust material for the JWKS fetch, chosen without httpx's env routing.
+
+    `trust_env=False` on the client is what keeps an ambient HTTP(S)_PROXY and any
+    ~/.netrc credential away from this request - but httpx implements SSL_CERT_FILE
+    and SSL_CERT_DIR under that same flag, and otherwise falls back to certifi's
+    bundle. A private Keycloak CA arrives through SSL_CERT_FILE (the Docker demo
+    mounts it at /trust/edge-ca.pem), so those two variables are read here
+    explicitly: trust is selected by the deployment, routing never is. With neither
+    set, defer to httpx's own default rather than second-guessing it.
+    """
+    for variable, keyword in (("SSL_CERT_FILE", "cafile"), ("SSL_CERT_DIR", "capath")):
+        value = os.environ.get(variable)
+        if not value:
+            continue
+        try:
+            return ssl.create_default_context(**{keyword: value})
+        except OSError as exc:
+            raise TokenError(
+                f"Cannot load the signing-key trust material from {variable}: {exc}",
+                status=503,
+                code="server_error",
+            ) from exc
+    return True
+
+
 class JwksCache:
     """One HTTPS JWKS URL, cached, streaming-bounded, no redirects, no ambient proxy.
 
@@ -323,6 +350,9 @@ class JwksCache:
         self._min_refresh = min_refresh
         self._clock = clock
         self._max_bytes = max_bytes
+        # Resolved once, at construction: a CA bundle the operator named must either
+        # load or stop the server, never be quietly ignored mid-verification.
+        self._ssl = _jwks_ssl_trust()
         self._lock = asyncio.Lock()
         self._keys: dict[str, Any] = {}
         self._fetched_at = 0.0
@@ -333,6 +363,7 @@ class JwksCache:
             self._client = httpx.AsyncClient(
                 timeout=self._timeout,
                 transport=self._transport,
+                verify=self._ssl,
                 follow_redirects=False,
                 # The URL is HTTPS-only by construction (`__init__` rejects any other
                 # scheme) and redirects are off, so nothing about this request may come

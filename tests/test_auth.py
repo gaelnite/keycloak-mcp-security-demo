@@ -7,12 +7,17 @@ policy suite is tests/test_policies.py.
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import json
 import os
+import ssl
 import sys
+import tempfile
 import time
 import unittest
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from unittest import mock
 
 LAB = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(LAB / "mcp"))
@@ -20,7 +25,10 @@ sys.path.insert(0, str(LAB / "mcp"))
 try:
     import httpx
     import jwt
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
     from cryptography.hazmat.primitives.asymmetric import rsa
+    from cryptography.x509.oid import NameOID
 
     HAVE_CRYPTO = True
 except ImportError:  # pragma: no cover - depends on the interpreter
@@ -307,6 +315,178 @@ class JwksFetchTests(unittest.TestCase):
                 else:
                     os.environ[name] = value
         asyncio.run(cache.aclose())
+
+
+def _self_signed_ca(path: Path, common_name: str) -> None:
+    """A CA file shaped like the one the demo edge mounts at /trust/edge-ca.pem."""
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, common_name)])
+    now = datetime.now(UTC)
+    certificate = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - timedelta(days=1))
+        .not_valid_after(now + timedelta(days=365))
+        .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
+        .sign(key, hashes.SHA256())
+    )
+    path.write_bytes(certificate.public_bytes(serialization.Encoding.PEM))
+
+
+def _common_names(context: ssl.SSLContext) -> set[str]:
+    return {
+        attribute[0][1]
+        for issued in context.get_ca_certs()
+        for attribute in issued["subject"]
+        if attribute[0][0] == "commonName"
+    }
+
+
+@unittest.skipUnless(HAVE_CRYPTO, "httpx + PyJWT + cryptography are required")
+class JwksTrustTests(unittest.TestCase):
+    """`trust_env=False` must not throw the deployment's own CA away."""
+
+    def cache(self, handler=None, **kwargs) -> JwksCache:
+        transport = httpx.MockTransport(handler or (lambda request: httpx.Response(200, content=b"{}")))
+        return JwksCache(JWKS_URL, transport=transport, **kwargs)
+
+    def test_ssl_cert_file_is_the_trust_anchor(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            ca = Path(directory) / "edge-ca.pem"
+            _self_signed_ca(ca, "MCP Demo Edge CA")
+            with mock.patch.dict(os.environ, {"SSL_CERT_FILE": str(ca), "SSL_CERT_DIR": ""}):
+                # No transport: this is the path the MCP server itself uses, where
+                # httpx builds the transport and has to be told what to trust.
+                cache = JwksCache(JWKS_URL)
+                self.addCleanup(asyncio.run, cache.aclose())
+                self.assertIsInstance(cache._ssl, ssl.SSLContext)
+                self.assertIn("MCP Demo Edge CA", _common_names(cache._ssl))
+                # The context is not merely built, it is the one the client dials with:
+                # this is the assertion that fails when the demo starts returning 503.
+                client = asyncio.run(cache._http())
+                self.assertFalse(client.trust_env)
+                self.assertIs(client._transport._pool._ssl_context, cache._ssl)
+
+    def test_a_named_ca_that_cannot_load_stops_the_server(self) -> None:
+        missing = {"SSL_CERT_FILE": "/nonexistent/edge-ca.pem", "SSL_CERT_DIR": ""}
+        with mock.patch.dict(os.environ, missing), self.assertRaises(TokenError):
+            self.cache()
+
+    def test_without_env_trust_material_httpx_default_is_untouched(self) -> None:
+        with mock.patch.dict(os.environ, {"SSL_CERT_FILE": "", "SSL_CERT_DIR": ""}):
+            self.assertIs(self.cache()._ssl, True)
+
+
+@unittest.skipUnless(HAVE_CRYPTO, "httpx + PyJWT + cryptography are required")
+class JwksTlsEndToEndTests(unittest.TestCase):
+    """Real TLS over a real socket, the way the Docker demo uses it.
+
+    The deployment mounts a private CA at /trust/edge-ca.pem and points
+    SSL_CERT_FILE at it. A MockTransport cannot express that, and this is exactly
+    where the proxy-isolation change broke the demo: the JWKS fetch fell back to
+    certifi, the edge certificate did not verify, and every token verification
+    answered 503.
+    """
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+
+    def test_jwks_is_fetched_over_https_from_a_private_ca(self) -> None:
+        import http.server
+        import threading
+
+        private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        now = datetime.now(UTC)
+        signer = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "MCP Demo Edge CA")])
+        ca = (
+            x509.CertificateBuilder()
+            .subject_name(signer)
+            .issuer_name(signer)
+            .public_key(private_key.public_key())
+            .serial_number(x509.random_serial_number())
+            .not_valid_before(now - timedelta(days=1))
+            .not_valid_after(now + timedelta(days=365))
+            .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
+            .add_extension(
+                x509.SubjectKeyIdentifier.from_public_key(private_key.public_key()), critical=False
+            )
+            .add_extension(
+                x509.KeyUsage(
+                    digital_signature=True, content_commitment=False, key_encipherment=False,
+                    data_encipherment=False, key_agreement=False, key_cert_sign=True,
+                    crl_sign=True, encipher_only=False, decipher_only=False,
+                ),
+                critical=True,
+            )
+            .sign(private_key, hashes.SHA256())
+        )
+        leaf = (
+            x509.CertificateBuilder()
+            .subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "localhost")]))
+            .issuer_name(signer)
+            .public_key(private_key.public_key())
+            .serial_number(x509.random_serial_number())
+            .not_valid_before(now - timedelta(days=1))
+            .not_valid_after(now + timedelta(days=365))
+            .add_extension(
+                x509.SubjectAlternativeName(
+                    [x509.DNSName("localhost"), x509.IPAddress(ipaddress.ip_address("127.0.0.1"))]
+                ),
+                critical=False,
+            )
+            .add_extension(
+                x509.KeyUsage(
+                    digital_signature=True, content_commitment=False, key_encipherment=True,
+                    data_encipherment=False, key_agreement=False, key_cert_sign=False,
+                    crl_sign=False, encipher_only=False, decipher_only=False,
+                ),
+                critical=True,
+            )
+            .add_extension(
+                x509.AuthorityKeyIdentifier.from_issuer_public_key(private_key.public_key()), critical=False
+            )
+            .sign(private_key, hashes.SHA256())
+        )
+        pem = private_key.private_bytes(
+            serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()
+        )
+        chain = Path(self.tmp.name) / "edge"
+        chain.mkdir()
+        (chain / "ca.pem").write_bytes(ca.public_bytes(serialization.Encoding.PEM))
+        (chain / "server.pem").write_bytes(leaf.public_bytes(serialization.Encoding.PEM) + pem)
+
+        document = _jwks_document(private_key.public_key())
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):  # noqa: N802 - http.server API
+                self.send_response(200)
+                self.send_header("content-type", "application/json")
+                self.send_header("content-length", str(len(document)))
+                self.end_headers()
+                self.wfile.write(document)
+
+            def log_message(self, *args) -> None:
+                pass
+
+        httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        server_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        server_context.load_cert_chain(certfile=str(chain / "server.pem"))
+        httpd.socket = server_context.wrap_socket(httpd.socket, server_side=True)
+        thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(httpd.server_close)
+        url = f"https://localhost:{httpd.server_address[1]}/realms/lab/protocol/openid-connect/certs"
+
+        with mock.patch.dict(os.environ, {"SSL_CERT_FILE": str(chain / "ca.pem"), "SSL_CERT_DIR": ""}):
+            cache = JwksCache(url, timeout=5.0)
+            self.addCleanup(asyncio.run, cache.aclose())
+            asyncio.run(cache.refresh())
+            key = asyncio.run(cache.get_key("k1"))
+        self.assertEqual(key.key_id, "k1")
 
 
 if __name__ == "__main__":  # pragma: no cover
