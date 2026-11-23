@@ -94,35 +94,37 @@ class ServerGateTests(unittest.TestCase):
             interactive=interactive,
         )
 
-    def test_a_human_principal_carries_keycloak_roles_not_mcp_capabilities(self) -> None:
-        """`realm_access.roles` decide policy; `mcp_roles` decides what is offered.
+    def test_a_human_is_judged_on_mcp_roles_and_a_machine_on_realm_roles(self) -> None:
+        """Two claims, two kinds of caller; reading the wrong one denies everything.
 
-        The demo grants a helpdesk user `mcp-users-read` through a group and its tool
-        capability through a consented client scope. Confusing the two claims either
-        widens policy to whatever a token was consented for, or - as first written -
-        leaves every human with no Cedar roles at all and denies the read the demo
-        advertises.
+        `deploy/docker/desktop_check.py` asserts that a consented human token carries
+        `mcp_roles` and *no* `realm_access` at all: what the user approved is the whole
+        of their MCP authority, not every role the realm happens to give them. A service
+        account is granted through realm role mappings instead. Taking realm roles for a
+        human left Cedar with an empty role set and denied the interactive demo's first
+        read.
         """
-        claims = TokenClaims(
-            subject="demo-helpdesk",
-            client_id="mcp-desktop",
-            scopes=frozenset({"keycloak.users.read"}),
-            realm="lab",
-            admin=False,
-            expires_at=9_999_999_999,
-            issuer=self.config.auth.issuer,
-            audience=self.config.auth.audience,
-            roles=frozenset({"mcp-users-read"}),  # the `mcp_roles` capability claim
-            realm_roles=frozenset(),              # the group-given realm role, below
+        human = self.claims(
+            scopes=["keycloak.users.read"],
+            roles=["mcp-users-read"],
+            realm_roles=["mcp-admin"],
             interactive=True,
         )
-        self.assertTrue(claims.interactive)
-        self.assertEqual(server.principal_for(claims).roles, frozenset())
-        granted = replace(claims, realm_roles=frozenset({"mcp-users-read"}))
-        principal = server.principal_for(granted)
+        principal = server.principal_for(human)
         self.assertIsInstance(principal, UserPrincipal)
         self.assertEqual(principal.roles, frozenset({"mcp-users-read"}))
         self.assertFalse(principal.admin)
+
+        machine = self.claims(
+            scopes=["keycloak.users.read"],
+            roles=["mcp-users-read"],
+            realm_roles=["mcp-users-read", "mcp-admin"],
+            admin=True,
+        )
+        principal = server.principal_for(machine)
+        self.assertIsInstance(principal, ClientPrincipal)
+        self.assertEqual(principal.roles, frozenset({"mcp-users-read", "mcp-admin"}))
+        self.assertTrue(principal.admin)
 
     def test_a_pre_cedar_denial_names_the_client_behind_the_principal(self) -> None:
         server._CLAIMS.set(self.claims(scopes=[], client_id="mcp-desktop"))

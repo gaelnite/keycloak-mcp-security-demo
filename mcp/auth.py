@@ -288,9 +288,9 @@ class TokenClaims:
     audience: str
     roles: frozenset[str] = frozenset()
     interactive: bool = False
-    # Keycloak's own `realm_access.roles`, kept apart from `roles`: for a human token the
-    # entitlements are the issued `mcp_roles` claim, for a machine token they are the
-    # client's realm roles. Cedar's `principal.roles` reads whichever one applies.
+    # `realm_access.roles` as Keycloak issued them, kept apart from `roles`. A machine
+    # token carries its authority here; a human token deliberately carries none, because
+    # its realm roles would say more than the session consented to.
     realm_roles: frozenset[str] = frozenset()
 
     def allows(self, scope: str) -> bool:
@@ -592,10 +592,6 @@ class KeycloakTokenVerifier:
             audience=self.config.audience,
             roles=entitlements,
             interactive=interactive,
-            # Keycloak's realm roles are the Cedar input for a caller of either kind:
-            # a user gets them through groups (`demo-helpdesk` -> `mcp-users-read`), a
-            # machine through client-scope role mappings. `mcp_roles` below stays the
-            # MCP-specific entitlement claim, which gates discovery, not policy.
             realm_roles=realm_roles,
         )
 

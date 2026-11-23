@@ -116,13 +116,20 @@ def principal_for(claims: TokenClaims) -> Principal:
     part of the principal: it goes to the PEP separately so cross-realm calls can be
     compared against it.
     """
-    realm, scopes, roles = claims.realm, frozenset(claims.scopes), frozenset(claims.realm_roles)
-    if claims.interactive:
+    interactive = claims.interactive
+    # The two kinds of caller are granted authority in different claims, on purpose. A
+    # consented human session carries it in `mcp_roles` and carries no `realm_access` at
+    # all - what the user was asked to approve is the whole of their MCP authority, not
+    # everything the realm happened to give them. A machine's authority is its own realm
+    # role assignments, which Keycloak puts in `realm_access.roles`.
+    roles = frozenset(claims.roles) if interactive else frozenset(claims.realm_roles)
+    scopes = frozenset(claims.scopes)
+    if interactive:
         return UserPrincipal(
             issuer=claims.issuer,
             subject=claims.subject,
             client_id=claims.client_id,
-            realm=realm,
+            realm=claims.realm,
             scopes=scopes,
             roles=roles,
             admin=claims.admin,
@@ -130,7 +137,7 @@ def principal_for(claims: TokenClaims) -> Principal:
     return ClientPrincipal(
         issuer=claims.issuer,
         client_id=claims.client_id,
-        realm=realm,
+        realm=claims.realm,
         scopes=scopes,
         roles=roles,
         admin=claims.admin,
