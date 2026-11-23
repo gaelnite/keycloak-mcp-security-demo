@@ -57,10 +57,16 @@ tokens, arguments or approval artifacts.
 
 `cedar/entities.json` contains realms, tools and realm-scoped resources, and no
 principals. A caller is described per request by the PEP, from claims the token verifier
-already checked: the realm that issued the token, its scopes, its realm roles, and
-whether those roles make it an admin. `mcp/pdp.mjs` turns those facts into the principal
-entity and parents it to its realm. Authority is therefore a property of the token, never
-of a row somebody kept up to date - or forgot to regenerate.
+already checked: the realm that issued the token, its scopes, and the roles Keycloak
+granted it - `mcp_roles` for a consented human session, `realm_access.roles` for a
+machine. `mcp/pdp.mjs` turns those facts into the principal entity and parents it to its
+realm. Authority is therefore a property of the token, never of a row somebody kept up to
+date - or forgot to regenerate.
+
+The two role claims are not interchangeable and neither is a superset. A human token
+carries no `realm_access` at all: consent defines the whole of its MCP authority, so a
+role the realm gave the user but nobody asked them to approve cannot reach a decision.
+A service account has no consented scope to carry, so its realm roles are its authority.
 
 That removes a config knob rather than adding one. `KC_MCP_CLIENT_ENTITY_MAP` used to
 rename a Keycloak client to a seeded Cedar entity; with no seeded clients there is nothing
