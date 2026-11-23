@@ -49,7 +49,12 @@ filtered at discovery and checked again when called.
 
 The PEP validates the Cedar schema, policies and entities at startup. Its PDP
 deadline defaults to 500 ms (configurable up to 2,000 ms). Startup, timeout,
-crash or malformed response denies the call. When file auditing is configured, a
+crash or malformed response denies the call. One PDP process serves a worker, so
+the whole round trip is serialised behind a lock and every response is matched to
+its request id; a response that is oversize, unterminated, unparseable or belongs
+to another request kills the PDP, and the next request respawns it under a restart
+budget. Decisions run on a worker thread so a slow PDP cannot stall the event loop
+shared by other sessions. When file auditing is configured, a
 write failure also denies; records contain decision facts and policy IDs, not
 tokens, arguments or approval artifacts.
 
