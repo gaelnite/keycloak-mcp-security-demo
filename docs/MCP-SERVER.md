@@ -48,7 +48,7 @@ KC_MCP_ACCESS_TOKEN_FILE=/secure/path/access-token \
 | `KC_URL`, `KC_ISSUER` | Required HTTPS URLs | Keycloak base and exact realm issuer. |
 | `KC_MCP_RESOURCE_URL` or `KC_AUDIENCE` | One required | Canonical HTTPS MCP audience enables OAuth discovery; otherwise use a legacy bearer audience. If both are set, they must match. |
 | `KC_ALLOWED_CLIENT_IDS` / `_FILE` | Required; no wildcard | Exact authorized client IDs, one per line in the file. URL-form IDs are validated without normalization. |
-| `KC_JWKS_URL` | Issuer cert endpoint | HTTPS JWKS; no redirects and a bounded response. |
+| `KC_JWKS_URL` | Issuer cert endpoint | HTTPS JWKS only; no redirects, a 256 KiB streaming bound, and the request never uses an ambient proxy. |
 | `KC_MCP_INTERACTIVE_CLIENT_IDS` | Unset | Allowlisted user clients that use verified entitlements and per-subject principals. Requires the canonical resource URL. |
 | `KC_MCP_CLIENT_ENTITY_MAP` | `{}` | Optional JSON map from client ID to Cedar entity ID. A nonempty map makes unmapped clients fail closed. |
 | `KC_EXTENSIONS` | `core` | Inventory labels. The six maintained tools are all core tools. |

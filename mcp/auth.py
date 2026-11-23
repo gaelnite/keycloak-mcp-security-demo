@@ -1,19 +1,22 @@
 """Keycloak OIDC access-token verification for the MCP server.
 
 Offline construction; network only on the first verification (JWKS). The verifier is
-deliberately narrow: HTTPS JWKS, no redirects, bounded response, RS256/ES256 only,
-exact issuer/audience, exp/iat enforced, `azp`/`client_id` exact allowlist (URL-form
-entries are validated against the draft-ietf-oauth-client-id-metadata-document-03
-Section 3 grammar and Section 10.1 identifier-equality rules, then accepted unchanged),
-and scopes parsed from `scope` or `scp`. Any failure is an instruction-shaped
-:class:`TokenError`; there is no anonymous fallback.
+deliberately narrow: HTTPS JWKS, no redirects, no ambient proxy, a bounded streaming
+read of the key document, RS256/ES256 only, exact issuer/audience, exp/iat enforced,
+`azp`/`client_id` exact allowlist (URL-form entries are validated against the
+draft-ietf-oauth-client-id-metadata-document-03 Section 3 grammar and Section 10.1
+identifier-equality rules, then accepted unchanged), and scopes parsed from `scope`
+or `scp`. Any failure is an instruction-shaped :class:`TokenError`; there is no
+anonymous fallback.
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import re
+import ssl
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -27,7 +30,13 @@ from tool_registry import CAPABILITIES
 
 ALLOWED_ALGORITHMS = frozenset({"RS256", "RS384", "ES256", "ES384"})
 MAX_TOKEN_BYTES = 16_384
-MAX_JWKS_BYTES = 1_048_576
+# Single source of truth for the JWKS size bound: a document is a handful of small
+# JWK objects (Keycloak 26.8 with two keys is ~1 KiB), so 256 KiB leaves a generous
+# rotation window while bounding what a hostile or misconfigured issuer can make
+# this process hold. Tests assert this value.
+MAX_JWKS_BYTES = 256 * 1024
+# Chunk size for the bounded read: the peak overshoot of a stream is one chunk.
+JWKS_CHUNK_BYTES = 16 * 1024
 DEFAULT_TIMEOUT = 5.0
 PROTECTED_RESOURCE_METADATA_PREFIX = "/.well-known/oauth-protected-resource"
 _RESOURCE_URL = re.compile(
@@ -284,8 +293,38 @@ class TokenClaims:
         return scope in self.scopes
 
 
+def _jwks_ssl_trust() -> ssl.SSLContext | bool:
+    """TLS trust material for the JWKS fetch, chosen without httpx's env routing.
+
+    `trust_env=False` on the client is what keeps an ambient HTTP(S)_PROXY and any
+    ~/.netrc credential away from this request - but httpx implements SSL_CERT_FILE
+    and SSL_CERT_DIR under that same flag, and otherwise falls back to certifi's
+    bundle. A private Keycloak CA arrives through SSL_CERT_FILE (the Docker demo
+    mounts it at /trust/edge-ca.pem), so those two variables are read here
+    explicitly: trust is selected by the deployment, routing never is. With neither
+    set, defer to httpx's own default rather than second-guessing it.
+    """
+    for variable, keyword in (("SSL_CERT_FILE", "cafile"), ("SSL_CERT_DIR", "capath")):
+        value = os.environ.get(variable)
+        if not value:
+            continue
+        try:
+            return ssl.create_default_context(**{keyword: value})
+        except OSError as exc:
+            raise TokenError(
+                f"Cannot load the signing-key trust material from {variable}: {exc}",
+                status=503,
+                code="server_error",
+            ) from exc
+    return True
+
+
 class JwksCache:
-    """One HTTPS JWKS URL, cached, bounded, no redirects, refresh on unknown kid."""
+    """One HTTPS JWKS URL, cached, streaming-bounded, no redirects, no ambient proxy.
+
+    A failed refresh never replaces the cached key set: `self._keys` is assigned only
+    after a document has been read, parsed and validated in full.
+    """
 
     def __init__(
         self,
@@ -301,6 +340,8 @@ class JwksCache:
         parsed = urlparse(url)
         if parsed.scheme != "https" or not parsed.hostname:
             raise TokenError("JWKS URL must be https:// with a host", code="server_error")
+        if max_bytes <= 0:
+            raise ValueError("max_bytes must be a positive byte count")
         self.url = url
         self.host = parsed.hostname.lower()
         self._transport = transport
@@ -309,6 +350,9 @@ class JwksCache:
         self._min_refresh = min_refresh
         self._clock = clock
         self._max_bytes = max_bytes
+        # Resolved once, at construction: a CA bundle the operator named must either
+        # load or stop the server, never be quietly ignored mid-verification.
+        self._ssl = _jwks_ssl_trust()
         self._lock = asyncio.Lock()
         self._keys: dict[str, Any] = {}
         self._fetched_at = 0.0
@@ -319,33 +363,64 @@ class JwksCache:
             self._client = httpx.AsyncClient(
                 timeout=self._timeout,
                 transport=self._transport,
+                verify=self._ssl,
                 follow_redirects=False,
+                # The URL is HTTPS-only by construction (`__init__` rejects any other
+                # scheme) and redirects are off, so nothing about this request may come
+                # from the environment either: with transport=None, httpx would honour
+                # HTTP(S)_PROXY/ALL_PROXY - handing an issuer-selecting request to a
+                # stray corporate proxy - and could pick up a ~/.netrc credential.
+                trust_env=False,
                 headers={"Accept": "application/json", "User-Agent": "keycloak-mcp/0.1"},
             )
         return self._client
 
+    async def _read_capped(self, response: httpx.Response) -> bytes:
+        """Read a response body incrementally and refuse it as soon as it is too big.
+
+        `client.get()` (and therefore `response.content`) buffers the whole body before
+        any size check can run, so `len(body) > max_bytes` only ever protected the
+        parse, never the memory: an issuer streaming 500 MB allocated 500 MB first and
+        was rejected afterwards. Chunked reads stop within one chunk of the cap, and a
+        declared Content-Length over the cap is refused before a byte is read.
+        """
+        declared = response.headers.get("content-length", "")
+        if declared.isdigit() and int(declared) > self._max_bytes:
+            raise TokenError("The JWKS response was unexpectedly large", status=503)
+        chunks: list[bytes] = []
+        size = 0
+        async for chunk in response.aiter_bytes(JWKS_CHUNK_BYTES):
+            size += len(chunk)
+            if size > self._max_bytes:
+                raise TokenError(
+                    f"The JWKS response exceeded the {self._max_bytes}-byte limit",
+                    status=503,
+                )
+            chunks.append(chunk)
+        return b"".join(chunks)
+
     async def refresh(self) -> None:
         client = await self._http()
         try:
-            response = await client.get(self.url)
+            # `stream=` keeps the response open until the capped read above has
+            # finished, so nothing buffers the whole document.
+            async with client.stream("GET", self.url) as response:
+                if response.status_code != 200:
+                    raise TokenError(
+                        f"The Keycloak JWKS endpoint returned HTTP {response.status_code}",
+                        status=503,
+                        code="temporarily_unavailable",
+                    )
+                body = await self._read_capped(response)
         except httpx.HTTPError as exc:
             raise TokenError(
                 "Could not reach the Keycloak JWKS endpoint; retry, then check KC_JWKS_URL",
                 status=503,
                 code="temporarily_unavailable",
             ) from exc
-        if response.status_code != 200:
-            raise TokenError(
-                f"The Keycloak JWKS endpoint returned HTTP {response.status_code}",
-                status=503,
-                code="temporarily_unavailable",
-            )
-        body = response.content or b""
-        if len(body) > self._max_bytes:
-            raise TokenError("The JWKS response was unexpectedly large", status=503)
         try:
-            document = response.json()
-        except ValueError as exc:
+            document = json.loads(body)
+        except (ValueError, UnicodeDecodeError) as exc:
             raise TokenError("The JWKS endpoint did not return JSON", status=503) from exc
         if not isinstance(document, dict) or not isinstance(document.get("keys"), list):
             raise TokenError("The JWKS document is not {'keys': [...]}", status=503)
