@@ -42,10 +42,15 @@ OPTIONS = {
 class RecordingPep:
     def __init__(self) -> None:
         self.calls = []
+        self.rejections = []
 
     def authorize(self, spec, *, realm, **kwargs):
         self.calls.append(spec.name)
         return Decision("allow" if realm == "lab" else "deny", reasons=("fixture-policy",))
+
+    def audit_rejection(self, tool, principal_type, principal_id, realm, *, reason, detail,
+                        approval_jti=None):
+        self.rejections.append({"tool": tool.name, "reason": reason, "detail": detail})
 
 
 @unittest.skipUnless(HAVE_MCP, "the MCP SDK is required for HTTP discovery tests")
@@ -198,6 +203,7 @@ class McpTransportTests(unittest.IsolatedAsyncioTestCase):
             )
             self.assertEqual(denied.json()["id"], 3)
             self.assertEqual(self.pep.calls, [])
+            self.assertEqual([record["reason"] for record in self.pep.rejections], ["scope_missing"])
             self.assertEqual(self.admin_requests, [])
 
             # Reauthorization can keep the same session. Use the new bearer downstream.
@@ -275,6 +281,7 @@ class McpTransportTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(denial.headers["content-type"].startswith("text/event-stream"))
             self.assertIn("lacks the required scope", json.dumps(self.rpc_message(denial)))
             self.assertEqual(self.pep.calls, [])
+            self.assertEqual([record["reason"] for record in self.pep.rejections], ["scope_missing"])
             self.assertEqual(self.admin_requests, [])
 
     async def test_resource_at_origin_has_origin_metadata(self):
