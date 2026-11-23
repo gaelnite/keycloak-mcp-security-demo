@@ -23,6 +23,7 @@ import select
 import shutil
 import subprocess
 import time
+import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -301,6 +302,12 @@ class CedarPep:
     def _request(
         self, payload: Mapping[str, Any], *, timeout: float | None = None
     ) -> dict[str, Any]:
+        # One long-lived PDP behind one pipe means a response is only meaningful
+        # if it answers *this* request. pdp.mjs echoes requestId on every branch
+        # (ping, validate, authorize, unknown-op), so correlation needs no change
+        # on the Node side.
+        request_id = uuid.uuid4().hex
+        payload = {**payload, "requestId": request_id}
         if self._proc is None or self._proc.poll() is not None:
             # Violation or crash: respawn under the restart budget, then retry once.
             self._restart()
@@ -337,6 +344,12 @@ class CedarPep:
                 else response
             )
             raise PdpError(f"Cedar PDP refused ({error}): {detail}")
+        if response.get("requestId") != request_id:
+            # An absent or foreign id means the stream is not answering this
+            # request, so the payload cannot be trusted either way: treat it as a
+            # framing violation and let the budgeted restart resynchronise.
+            self.close()
+            raise PdpError("the Cedar PDP response did not match the request")
         return response
 
     def _read_line(self, proc: subprocess.Popen[bytes], timeout_s: float) -> bytes:
