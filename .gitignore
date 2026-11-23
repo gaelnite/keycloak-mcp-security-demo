@@ -6,6 +6,10 @@ __pycache__/
 *.pyc
 .pytest_cache/
 
+# GitNexus code-intelligence index — machine-local, schema-bearing and large.
+# Never commit: this repository is public.
+.gitnexus/
+
 # Secrets and generated credentials
 cimd/keys/
 *.jwt
