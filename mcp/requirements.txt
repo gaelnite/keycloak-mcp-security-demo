@@ -1,4 +1,7 @@
-# Keycloak MCP reference server runtime (Python 3.11+)
+# Keycloak MCP reference server runtime.
+# Tested on CPython 3.14 and 3.15 in CI (the 3.11 language floor is the oldest
+# version this code is written against, not the version the demo is verified on).
+# Pins are deliberately unchanged: resolution is reproducible on both CI legs.
 mcp>=1.30,<2
 PyJWT>=2.10,<3
 httpx>=0.28,<0.29
