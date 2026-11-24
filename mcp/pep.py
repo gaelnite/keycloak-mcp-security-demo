@@ -14,6 +14,13 @@ Stdlib only so the offline tests run without the MCP SDK. The PEP:
 * denies on any PDP/audit failure (no fallback to scope-only checks);
 * appends a redacted audit record with the deciding policy IDs and bundle hash.
 
+The caller is a `UserPrincipal` or a `ClientPrincipal`, and both are built only from
+claims the token verifier already checked: realm, scopes, roles. The PDP synthesises
+that entity per request, so authority never depends on which principals happened to be
+seeded into `cedar/entities.json`. The realm a request *targets* is a separate argument
+from the realm that issued the token, and Cedar's resource is always `realm:<target>`:
+that distinction is what `kc-deny-cross-realm` enforces.
+
 It never logs tool arguments, tokens, client secrets or approval tokens.
 """
 
@@ -88,17 +95,54 @@ class Decision:
         return self.decision == "allow"
 
 
+def _realm_of(issuer: str) -> str:
+    """The realm an issuer URL points at, or "" when it is not a realm issuer.
+
+    `auth.realm_from_issuer()` is the strict form used when verifying a token; this one
+    only guards the PEP boundary, so a principal can never name a realm its issuer does
+    not serve. Stdlib-only, because the PEP must import without httpx or PyJWT.
+    """
+    marker = issuer.find("/realms/")
+    return "" if marker == -1 else issuer[marker + len("/realms/") :].strip("/")
+
+
 @dataclass(frozen=True)
 class UserPrincipal:
+    """A human subject, as its own access token describes it.
+
+    Everything a policy may rely on comes from verified claims: which realm issued the
+    token, which scopes it grants, which realm roles the subject holds here. Nothing is
+    looked up in `entities.json`, so regenerating that bundle can never widen a caller.
+    """
+
     issuer: str
     subject: str
     client_id: str
     realm: str
     scopes: frozenset[str]
     roles: frozenset[str]
+    admin: bool = False
+
+    def __post_init__(self) -> None:
+        # The realm belongs to the issuer, not to the request path: a token issued by
+        # one realm must not be usable as an entity of another.
+        origin = _realm_of(self.issuer)
+        if origin and self.realm != origin:
+            raise ValueError(f"realm {self.realm!r} is not issued by {self.issuer!r}")
+
+    @property
+    def entity_type(self) -> str:
+        return "User"
+
+    @property
+    def facts_key(self) -> str:
+        """The request field `mcp/pdp.mjs` reads this principal's facts from."""
+        return "user"
 
     @property
     def id(self) -> str:
+        # Stable for audit: the same subject under the same issuer is always the same
+        # entity id, so a scope or role change shows up as an attribute change.
         origin = json.dumps([self.issuer, self.subject]).encode("ascii")
         return "oidc:" + hashlib.sha256(origin).hexdigest()
 
@@ -106,14 +150,67 @@ class UserPrincipal:
         return {
             "realm": self.realm,
             "attrs": {
-                "issuer": self.issuer,
                 "subject": self.subject,
+                "issuer": self.issuer,
                 "clientId": self.client_id,
                 "scopes": sorted(self.scopes),
                 "roles": sorted(self.roles),
-                "admin": False,
+                "admin": self.admin,
             },
         }
+
+
+@dataclass(frozen=True)
+class ClientPrincipal:
+    """A machine client, as its own access token describes it.
+
+    This type exists because a client used to have no facts at all: its entity id came
+    from `KC_MCP_CLIENT_ENTITY_MAP` and its scopes and admin flag came from whichever
+    fixture happened to be seeded in the bundle. A client's authority is now whatever the
+    token says - the verifier's allowlist still decides whether that token is accepted at
+    all, and the policy still decides what those scopes and realm roles permit.
+    """
+
+    issuer: str
+    client_id: str
+    realm: str
+    scopes: frozenset[str]
+    roles: frozenset[str]
+    admin: bool = False
+
+    def __post_init__(self) -> None:
+        origin = _realm_of(self.issuer)
+        if origin and self.realm != origin:
+            raise ValueError(f"realm {self.realm!r} is not issued by {self.issuer!r}")
+
+    @property
+    def entity_type(self) -> str:
+        return "Client"
+
+    @property
+    def facts_key(self) -> str:
+        return "client"
+
+    @property
+    def id(self) -> str:
+        # The "client" discriminator keeps this out of the user id space: a client
+        # named like a subject must never resolve to that human's entity.
+        origin = json.dumps([self.issuer, "client", self.client_id]).encode("ascii")
+        return "oidc:" + hashlib.sha256(origin).hexdigest()
+
+    def to_pdp(self) -> dict[str, Any]:
+        return {
+            "realm": self.realm,
+            "attrs": {
+                "clientId": self.client_id,
+                "scopes": sorted(self.scopes),
+                "roles": sorted(self.roles),
+                "admin": self.admin,
+            },
+        }
+
+
+Principal = UserPrincipal | ClientPrincipal
 
 
 def _now() -> str:
@@ -283,15 +380,21 @@ class CedarPep:
         self,
         tool: ToolSpec,
         *,
-        principal_type: str,
-        principal_id: str,
+        principal: Principal,
         realm: str,
         extensions: Sequence[str],
         writes_enabled: bool = False,
         approval: Mapping[str, Any] | None = None,
         tool_known: bool = True,
-        user: UserPrincipal | None = None,
     ) -> Decision:
+        """Ask the PDP about one tool call.
+
+        `realm` is the realm the request *targets*, from the request path, and reaches
+        Cedar only as the request resource. `principal` is the verified token's view of
+        the caller, including the realm that issued it. Keeping those two arguments
+        separate is what lets `kc-deny-cross-realm` see both sides of the call. This
+        method blocks, so `server.py` calls `authorize_async()` instead.
+        """
         approval_verified, approval_tool = _approval_facts(approval)
         context = build_context(
             realm=realm,
@@ -301,17 +404,14 @@ class CedarPep:
             approval_tool=approval_tool,
             tool_known=tool_known,
         )
-        if user is not None:
-            principal_type, principal_id = "User", user.id
         payload = {
             "op": "authorize",
-            "principal": {"type": f"KeycloakMCP::{principal_type}", "id": principal_id},
+            "principal": {"type": f"KeycloakMCP::{principal.entity_type}", "id": principal.id},
             "action": {"type": "KeycloakMCP::Action", "id": ACTION[tool.tier]},
             "resource": {"type": "KeycloakMCP::Tool", "id": tool.name},
             "context": context,
+            principal.facts_key: principal.to_pdp(),
         }
-        if user is not None:
-            payload["user"] = user.to_pdp()
         try:
             response = self._request(payload)
             decision = self._decision(response)
@@ -323,7 +423,7 @@ class CedarPep:
                 failed_closed=True,
             )
         try:
-            self._audit(tool, principal_type, principal_id, realm, decision)
+            self._audit(tool, principal, realm, decision)
         except OSError as exc:
             return Decision(
                 decision="deny",
@@ -491,8 +591,7 @@ class CedarPep:
     def _audit(
         self,
         tool: ToolSpec,
-        principal_type: str,
-        principal_id: str,
+        principal: Principal,
         realm: str,
         decision: Decision,
     ) -> None:
@@ -504,8 +603,12 @@ class CedarPep:
             "policyId": tool.policy_id,
             "tier": tool.tier,
             "extension": tool.extension,
-            "principalType": principal_type,
-            "principal": principal_id,
+            "principalType": principal.entity_type,
+            # The entity id is a hash of issuer and identity, which keeps a subject
+            # stable across realms but says nothing on its own: the client the token
+            # was issued to is what an investigator needs to attribute a decision.
+            "principal": principal.id,
+            "clientId": principal.client_id,
             "realm": realm,
             "decision": decision.decision,
             "reasons": list(decision.reasons),
@@ -532,12 +635,15 @@ class CedarPep:
         reason: str,
         detail: str,
         approval_jti: str | None = None,
+        client_id: str | None = None,
     ) -> None:
         """Append a redacted deny record for a pre-Cedar gate rejection.
 
         Used by the approval gate (SEC-04): replay and wildcard denials must
         leave a forensic trail even though no Cedar decision was made. The
         approval token itself never appears; `approval_jti` is a public id.
+        `client_id` names the token's client where one is known, matching the
+        `clientId` a Cedar decision record carries.
         """
         if self.audit_path is None:
             return
@@ -558,6 +664,8 @@ class CedarPep:
         }
         if approval_jti:
             record["approvalJti"] = approval_jti
+        if client_id:
+            record["clientId"] = client_id
         data = (json.dumps(record, sort_keys=True) + "\n").encode("utf-8")
         self.audit_path.parent.mkdir(parents=True, exist_ok=True)
         descriptor = os.open(

@@ -202,7 +202,6 @@ services:
       KC_ISSUER: https://localhost:${KC_MCP_DEMO_PORT:-49443}/realms/lab
       KC_MCP_RESOURCE_URL: https://localhost:${KC_MCP_DEMO_PORT:-49443}/mcp
       KC_ALLOWED_CLIENT_IDS: mcp-workload
-      KC_MCP_CLIENT_ENTITY_MAP: '{"mcp-workload":"mcp-claude"}'
       KC_MCP_TOOL_ALLOWLIST: get_extension_inventory
       KC_CLOCK_SKEW: "0"
       SSL_CERT_FILE: /trust/edge-ca.pem

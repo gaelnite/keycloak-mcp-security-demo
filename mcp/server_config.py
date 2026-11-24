@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -40,7 +39,6 @@ class ServerConfig:
     extensions: frozenset[str]
     writes_enabled: bool
     audit_log: str | None
-    client_entity_map: Mapping[str, str]
     approval: ApprovalVerifier | None
     tool_allowlist: frozenset[str] | None = None
     delegation: DelegationConfig | None = None
@@ -56,14 +54,6 @@ class ServerConfig:
             if part.strip()
         )
         try:
-            entity_map = json.loads(values.get("KC_MCP_CLIENT_ENTITY_MAP") or "{}")
-        except json.JSONDecodeError as exc:
-            raise ConfigError(f"KC_MCP_CLIENT_ENTITY_MAP is not JSON: {exc}") from exc
-        if not isinstance(entity_map, dict) or not all(
-            isinstance(key, str) and isinstance(value, str) for key, value in entity_map.items()
-        ):
-            raise ConfigError("KC_MCP_CLIENT_ENTITY_MAP must be a JSON object of string pairs")
-        try:
             approval = ApprovalVerifier.from_env(values)
         except ApprovalError as exc:
             raise ConfigError(str(exc)) from exc
@@ -78,8 +68,6 @@ class ServerConfig:
             tool_allowlist = frozenset(values["KC_MCP_TOOL_ALLOWLIST"].replace(",", " ").split())
             if unknown := tool_allowlist.difference(TOOLS_BY_NAME):
                 raise ConfigError("KC_MCP_TOOL_ALLOWLIST contains unknown tools: " + ", ".join(sorted(unknown)))
-        if auth.interactive_client_ids.intersection(entity_map):
-            raise ConfigError("interactive clients cannot also use static Cedar client mappings")
         delegation = DelegationConfig.from_env(auth, values)
         if delegation is not None and writes_enabled and (
             not isinstance(approval.jti_store, SqliteJtiStore)
@@ -92,7 +80,6 @@ class ServerConfig:
             extensions=extensions,
             writes_enabled=writes_enabled,
             audit_log=(values.get("KC_MCP_AUDIT_LOG") or "").strip() or None,
-            client_entity_map=entity_map,
             approval=approval,
             tool_allowlist=tool_allowlist,
             delegation=delegation,

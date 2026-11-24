@@ -23,17 +23,17 @@ from pathlib import Path
 LAB = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(LAB / "mcp"))
 
-from pep import STDERR_TAIL_LIMIT, CedarPep  # noqa: E402
+from pep import STDERR_TAIL_LIMIT, CedarPep, ClientPrincipal  # noqa: E402
 from tool_registry import TOOLS_BY_NAME  # noqa: E402
 
 TOOL = TOOLS_BY_NAME["get_extension_inventory"]
 
 # A stub PDP, shaped by placeholders (never %-formatting: the JS contains % signs):
-#   FLOOD    bytes written to stderr synchronously, i.e. blocking until drained
+#   FLOOD    bytes written to stderr with stream backpressure before the answer
 #   DELAY    simulated decision time in ms
 #   MARKER   appended to stderr after the flood
-#   IDENTITY name the answered policy after the principal asked about, so a caller
-#            can prove it received *its own* decision
+#   IDENTITY name the answered policy after the client asked, so a caller can prove
+#            it received *its own* decision
 #   BOGUS    path of a one-shot flag file: the first authorize answer of the whole
 #            run (not of the process) carries a foreign requestId
 STUB = """
@@ -45,11 +45,15 @@ const marker = "@MARKER@";
 const identity = @IDENTITY@;
 const bogusFile = "@BOGUS@";
 const emit = (payload) => process.stdout.write(JSON.stringify(payload) + "\\n");
+const writeStderr = (text) => new Promise((resolve, reject) => {
+  if (!text) return resolve();
+  process.stderr.write(text, (error) => error ? reject(error) : resolve());
+});
 const alreadyBogus = () => {
   try { return fs.readFileSync(bogusFile, "utf8") === "1"; } catch { return false; }
 };
 const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
-rl.on("line", (line) => {
+rl.on("line", async (line) => {
   if (!line.trim()) return;
   const req = JSON.parse(line);
   if (req.op === "ping") {
@@ -59,15 +63,15 @@ rl.on("line", (line) => {
     });
     return;
   }
-  if (flood) fs.writeSync(2, flood);
-  if (marker) fs.writeSync(2, marker + "\\n");
+  await writeStderr(flood);
+  await writeStderr(marker ? marker + "\\n" : "");
   const bogus = bogusFile && !alreadyBogus();
   if (bogus) fs.writeFileSync(bogusFile, "1");
   const answer = () => emit({
     ok: true,
     requestId: bogus ? "00000000000000000000000000000000" : req.requestId,
     decision: "allow",
-    determiningPolicies: identity ? ["stub:" + req.principal.id] : ["stub-allow"],
+    determiningPolicies: identity ? ["stub:" + req.client.attrs.clientId] : ["stub-allow"],
     errors: [],
     warnings: [],
     bundleHash: "0".repeat(64),
@@ -110,19 +114,33 @@ class StubPepCase(unittest.IsolatedAsyncioTestCase):
         return pep
 
     def ask(self, pep: CedarPep, principal_id: str = "mcp-claude"):
+        principal = ClientPrincipal(
+            issuer="https://keycloak.example/realms/lab",
+            client_id=principal_id,
+            realm="lab",
+            scopes=frozenset(TOOL.scopes),
+            roles=frozenset(),
+            admin=False,
+        )
         return pep.authorize(
             TOOL,
-            principal_type="Client",
-            principal_id=principal_id,
+            principal=principal,
             realm="lab",
             extensions=["core"],
         )
 
     async def ask_async(self, pep: CedarPep, principal_id: str = "mcp-claude"):
+        principal = ClientPrincipal(
+            issuer="https://keycloak.example/realms/lab",
+            client_id=principal_id,
+            realm="lab",
+            scopes=frozenset(TOOL.scopes),
+            roles=frozenset(),
+            admin=False,
+        )
         return await pep.authorize_async(
             TOOL,
-            principal_type="Client",
-            principal_id=principal_id,
+            principal=principal,
             realm="lab",
             extensions=["core"],
         )

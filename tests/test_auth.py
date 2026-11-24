@@ -98,8 +98,15 @@ class TokenVerifierTests(unittest.TestCase):
         self.assertEqual(claims.client_id, CLIENT_URL)
         self.assertEqual(claims.realm, "lab")
         self.assertTrue(claims.admin)
+        self.assertEqual(claims.realm_roles, frozenset({"mcp-admin"}))
         self.assertIn("keycloak.realms.read", claims.scopes)
         self.assertTrue(claims.allows("keycloak.users.read"))
+
+    def test_realm_roles_are_extracted_and_filtered(self) -> None:
+        claims = self.verify(
+            self.token(realm_access={"roles": ["mcp-users-read", 7, None]})
+        )
+        self.assertEqual(claims.realm_roles, frozenset({"mcp-users-read"}))
 
     def test_interactive_token_class_and_capability_audience_are_bound(self) -> None:
         resource = "https://mcp.example/mcp"
