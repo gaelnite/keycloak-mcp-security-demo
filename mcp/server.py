@@ -342,7 +342,7 @@ async def _authorized_call(spec: ToolSpec, **kwargs: Any) -> Any:
         denied, approval = _delegated_approval(runtime, user, spec, kwargs)
         if denied is not None:
             return denied
-    decision = runtime.pep.authorize(
+    decision = await runtime.pep.authorize_async(
         spec,
         principal=actor,
         realm=realm,
