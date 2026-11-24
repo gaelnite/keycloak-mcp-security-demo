@@ -25,7 +25,8 @@ These files implement the Docker profiles described in the [verification record]
   `mcp/pep.py`, `mcp/gen_cedar.py`, `cedar/`, and `mcp/pdp.mjs` implement and validate Cedar decisions.
 - `mcp/delegation.py` obtains capability-specific SVIDs, exchanges the verified human token, and validates
   the downstream token. `deploy/docker/private-admin.conf` restricts the private gateway by method and
-  route; `mcp/approval.py` checks one-time signed write approvals.
+  route, consulting the check in `mcp/admin_gateway.py`, which runs as its own container without Workload
+  API access; `mcp/approval.py` checks one-time signed write approvals.
 
 ## Profile behavior
 

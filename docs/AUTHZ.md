@@ -97,10 +97,14 @@ The delegated profile exchanges the human's access token for a short-lived
 capability token, then sends it only to a private Admin gateway. MCP validates
 the token subject, exact Admin audience, requester, scope set, lifetime and role
 ceiling. The gateway checks the HTTP method, normalized route and query before
-forwarding. The public edge returns 404 for Admin routes. Keycloak's own role
+forwarding; it asks a separate sidecar container, not the MCP server it
+constrains, and forwards nothing when that checker cannot answer. The sidecar
+holds no Workload API credential, so it can verify an exchanged token but cannot
+request one. The public edge returns 404 for Admin routes. Keycloak's own role
 checks still apply.
 
 Implementation entry points: [`mcp/auth.py`](../mcp/auth.py),
 [`mcp/server.py`](../mcp/server.py), [`mcp/pep.py`](../mcp/pep.py),
-[`mcp/delegation.py`](../mcp/delegation.py), and
+[`mcp/delegation.py`](../mcp/delegation.py),
+[`mcp/admin_gateway.py`](../mcp/admin_gateway.py), and
 [`deploy/docker/private-admin.conf`](../deploy/docker/private-admin.conf).

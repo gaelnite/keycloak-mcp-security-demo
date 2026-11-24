@@ -34,7 +34,7 @@ from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 from starlette.authentication import AuthCredentials
 from starlette.requests import Request
-from starlette.responses import JSONResponse, Response
+from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from approval import ApprovalError
@@ -45,7 +45,7 @@ from auth import (
     TokenError,
     bearer_from_header,
 )
-from delegation import DelegatedAdmin, DelegationError, gateway_capability
+from delegation import DelegatedAdmin, DelegationError
 from generated_tool_wrappers import build_tool_functions
 from keycloak_admin import KeycloakAdmin
 from pep import CedarPep, ClientPrincipal, PepError, Principal, UserPrincipal, pep_from_env
@@ -55,7 +55,6 @@ from tool_registry import LOCALE_FIXTURE_ID, LOCALES, TOOLS, ToolSpec
 from tool_registry import TOOLS_BY_NAME as SPECS
 
 DEFAULT_PORT = 8766
-ADMIN_CHECK_PATH = "/__delegated_admin_check"
 
 
 @dataclass
@@ -430,20 +429,20 @@ class KeycloakMCP(FastMCP):
 
 
 class KeycloakAuthMiddleware:
-    def __init__(self, app: ASGIApp, verifier: KeycloakTokenVerifier, *, admin_check: bool = False) -> None:
+    def __init__(self, app: ASGIApp, verifier: KeycloakTokenVerifier) -> None:
         self.app = app
         self.verifier = verifier
         self.resource = verifier.config.protected_resource
-        self.admin_check = admin_check
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         resource = self.resource
+        # Only the resource metadata and the liveness route are public; every MCP request
+        # carries a bearer the middleware has to verify.  The private Admin gateway's
+        # authorization check is not served here at all: see mcp/admin_gateway.py.
         if scope["type"] != "http" or scope["path"] == "/healthz" or (
             resource is not None
             and scope["path"] == resource.metadata_path
             and scope["method"] in {"GET", "HEAD"}
-        ) or (
-            self.admin_check and scope["path"] == ADMIN_CHECK_PATH and scope["method"] == "GET"
         ):
             await self.app(scope, receive, send)
             return
@@ -542,9 +541,7 @@ def build_mcp(config: ServerConfig) -> tuple[KeycloakMCP, list[str]]:
     return mcp, _register_tools(mcp, config)
 
 
-def build_http_app(
-    mcp: KeycloakMCP, verifier: KeycloakTokenVerifier, *, delegate: DelegatedAdmin | None = None
-) -> ASGIApp:
+def build_http_app(mcp: KeycloakMCP, verifier: KeycloakTokenVerifier) -> ASGIApp:
     @mcp.custom_route("/healthz", methods=["GET"])
     async def healthz(_request: Request) -> JSONResponse:
         return JSONResponse({"status": "ok", "server": "keycloak-mcp"})
@@ -559,23 +556,7 @@ def build_http_app(
                 "bearer_methods_supported": ["header"],
             })
 
-    if delegate is not None:
-        @mcp.custom_route(ADMIN_CHECK_PATH, methods=["GET"])
-        async def check_admin(request: Request) -> Response:
-            capability = gateway_capability(
-                delegate.config.admin_path, request.headers.get("x-admin-method", ""), request.headers.get("x-admin-path", ""),
-                request.headers.get("x-admin-query", ""),
-            )
-            if capability is None:
-                return Response(status_code=403)
-            try:
-                token = bearer_from_header(request.headers.get("authorization"))
-                await delegate.verify_token(token, capability)
-            except (TokenError, DelegationError):
-                return Response(status_code=403)
-            return Response(status_code=204)
-
-    return KeycloakAuthMiddleware(mcp.streamable_http_app(), verifier, admin_check=delegate is not None)
+    return KeycloakAuthMiddleware(mcp.streamable_http_app(), verifier)
 
 
 def _stdio_token() -> str:
@@ -674,7 +655,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     import uvicorn
 
-    app = build_http_app(mcp, verifier, delegate=runtime.delegation)
+    app = build_http_app(mcp, verifier)
     config_uvicorn = uvicorn.Config(app, host=args.host, port=args.port, log_level="warning")
     print(
         f"keycloak-mcp: http 127.0.0.1:{args.port}, realm={config.auth.realm}, "
