@@ -410,8 +410,10 @@ import fs from "node:fs";
 import readline from "node:readline";
 const counterPath = %r;
 let count = fs.existsSync(counterPath) ? Number(fs.readFileSync(counterPath, "utf8")) : 0;
-const answer = JSON.stringify({
-  ok: true, decision: "allow", determiningPolicies: ["stub-allow"],
+// The PEP correlates by requestId, so a stub that wants to be accepted must
+// answer the request it was given, not a fixed payload.
+const answerFor = (req) => JSON.stringify({
+  ok: true, requestId: req.requestId, decision: "allow", determiningPolicies: ["stub-allow"],
   bundleHash: "0".repeat(64),
 }) + "\\n";
 function bump() { count += 1; fs.writeFileSync(counterPath, String(count)); return count; }
@@ -419,6 +421,7 @@ const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity 
 rl.on("line", (line) => {
   if (!line.trim()) return;
   const req = JSON.parse(line);
+  const answer = answerFor(req);
   if (req.op === "ping") {
     process.stdout.write(JSON.stringify({ ok: true, requestId: req.requestId }) + "\\n");
     return;
@@ -442,6 +445,20 @@ STUB_CASES = {
     "      setTimeout(() => process.stdout.write('ion\":\"allow\"}\\n'), 3000);\n"
     "    } else process.stdout.write(answer);\n",
     "oversize": "    if (bump() === 1) process.stdout.write(\"x\".repeat(2 * 1024 * 1024));\n"
+    "    else process.stdout.write(answer);\n",
+    # The case the newline-guarded cap used to miss: the response crosses
+    # MAX_RESPONSE_BYTES in the very chunk that also terminates the line, so the
+    # old `b"\n" not in buffer` guard never fired. The bytes are split across two
+    # writes because a raw pipe read returns at most 64 KiB at a time.
+    "oversize_with_newline": "    if (bump() === 1) {\n"
+    "      process.stdout.write(\"x\".repeat(1024 * 1024 - 10));\n"
+    "      setTimeout(() => process.stdout.write(\"y\".repeat(20) + \"\\n\"), 100);\n"
+    "    } else process.stdout.write(answer);\n",
+    # A correctly framed, well-formed answer to a *different* request. The PEP must
+    # refuse it rather than act on someone else's decision.
+    "wrong_request_id": "    if (bump() === 1) process.stdout.write(JSON.stringify({\n"
+    "      ok: true, requestId: 'stale-from-a-previous-request', decision: 'allow',\n"
+    "      determiningPolicies: ['stub-allow'], bundleHash: '0'.repeat(64)}) + '\\n');\n"
     "    else process.stdout.write(answer);\n",
     "trailing_bytes": "    if (bump() === 1) process.stdout.write(answer + answer);\n"
     "    else process.stdout.write(answer);\n",
@@ -509,10 +526,35 @@ class PdpRecoveryTests(unittest.TestCase):
         self.assert_denied(self.authorize(), "1048576 bytes")
         self.assertTrue(self.authorize().allowed)
 
+    def test_oversized_newline_terminated_response_denied_and_recovers(self) -> None:
+        # The cap guard sat behind `b"\n" not in buffer`, so a single chunk that
+        # oversizes *and* terminates the line left the loop and was returned for
+        # parsing. The bound is now checked on every chunk, before the newline test.
+        self.make_pep("oversize_with_newline")
+        self.assert_denied(self.authorize(), "1048576 bytes")
+        self.assertTrue(self.authorize().allowed)
+
     def test_trailing_bytes_are_a_framing_violation(self) -> None:
         self.make_pep("trailing_bytes")
         self.assert_denied(self.authorize(), "trailing bytes")
         self.assertTrue(self.authorize().allowed)
+
+    def test_uncorrelated_response_denies_and_recovers(self) -> None:
+        # A well-formed allow for a request that was never made is a framing
+        # violation: without correlation it would be honoured as this caller's
+        # decision.
+        self.make_pep("wrong_request_id")
+        self.assert_denied(self.authorize(), "did not match the request")
+        self.assertTrue(self.authorize().allowed)
+
+    def test_every_request_carries_a_unique_request_id(self) -> None:
+        # The stub's ping branch echoes whatever id arrived, so this asserts the
+        # PEP generates one per request and does not reuse it.
+        pep = self.make_pep("trailing_bytes")
+        first = pep._request({"op": "ping"}, timeout=2.0)
+        second = pep._request({"op": "ping"}, timeout=2.0)
+        self.assertEqual(len(first["requestId"]), 32)
+        self.assertNotEqual(first["requestId"], second["requestId"])
 
     def test_unexpected_exit_respawns_lazily(self) -> None:
         pep = self.make_pep("exit_after_answer")

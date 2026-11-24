@@ -48,6 +48,12 @@ class RecordingPep:
         self.calls.append(spec.name)
         return Decision("allow" if realm == "lab" else "deny", reasons=("fixture-policy",))
 
+    async def authorize_async(self, spec, **kwargs):
+        # server._evaluate must go through the async form; if it ever calls the
+        # blocking one directly again, these doubles fail loudly instead of
+        # silently blocking the loop.
+        return self.authorize(spec, **kwargs)
+
     def audit_rejection(self, tool, principal_type, principal_id, realm, *, reason, detail,
                         approval_jti=None):
         self.rejections.append({"tool": tool.name, "reason": reason, "detail": detail})

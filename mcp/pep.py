@@ -2,7 +2,12 @@
 
 Stdlib only so the offline tests run without the MCP SDK. The PEP:
 * maps a verified Keycloak token + tool spec to a Cedar request;
-* calls the local Node PDP (cedar-wasm) over JSON lines with a hard 500 ms deadline;
+* calls the local Node PDP (cedar-wasm) over JSON lines with a hard 500 ms deadline
+  and a MAX_RESPONSE_BYTES bound enforced on every chunk read;
+* serialises the whole request/response round trip under one lock, correlates every
+  response by requestId, and drains the PDP's stderr into a bounded tail;
+* `authorize_async()` runs that round trip on a worker thread so a slow PDP cannot
+  block the asyncio event loop;
 * on a deadline miss or framing violation denies that request, kills the PDP and
   lazily restarts it (with backoff) so the next request recovers; every failure
   path still denies;
@@ -14,6 +19,7 @@ It never logs tool arguments, tokens, client secrets or approval tokens.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import hashlib
 import json
@@ -21,7 +27,10 @@ import os
 import select
 import shutil
 import subprocess
+import threading
 import time
+import uuid
+from collections import deque
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -40,6 +49,13 @@ MAX_RESPONSE_BYTES = 1024 * 1024
 # storm: at most MAX_RESTARTS_IN_WINDOW respawns per RESTART_WINDOW_SECONDS.
 RESTART_WINDOW_SECONDS = 60.0
 MAX_RESTARTS_IN_WINDOW = 5
+# The PDP's stderr is drained into a fixed-size tail. An undrained pipe fills at
+# ~64 KiB and then blocks the *writer*, i.e. the PDP, which would surface as a
+# deadline miss on a decision; a full read() into a str could also grow without
+# bound. Bytes are kept in chunks so a flood costs a few KiB, never megabytes.
+STDERR_CHUNK_BYTES = 256
+STDERR_TAIL_BYTES = 4096
+STDERR_TAIL_LIMIT = 400
 ACTION = {READ: "Read", WRITE: "Write", ADMIN: "Admin"}
 
 
@@ -56,7 +72,7 @@ class _DeadlineExceeded(Exception):
 
 
 class _ResponseTooLarge(Exception):
-    """Internal: the PDP streamed more than MAX_RESPONSE_BYTES without a newline."""
+    """Internal: the PDP produced more than MAX_RESPONSE_BYTES of response bytes."""
 
 
 @dataclass(frozen=True)
@@ -157,6 +173,15 @@ class CedarPep:
             raise PepError(f"Cedar PDP script not found: {self._script}")
         self._proc: subprocess.Popen[bytes] | None = None
         self._restarts: list[float] = []
+        # stderr is written by the drain thread and read by _stderr_tail(); the
+        # deque bounds the memory and the lock only guards the copy-out.
+        self._stderr_chunks: deque[bytes] = deque(
+            maxlen=max(1, STDERR_TAIL_BYTES // STDERR_CHUNK_BYTES)
+        )
+        self._stderr_lock = threading.Lock()
+        # Serialises the whole PDP round trip. Reentrant: _request -> _restart ->
+        # _start -> the startup ping re-enters _request on the same thread.
+        self._io_lock = threading.RLock()
         self._start()
 
     # -- lifecycle -------------------------------------------------------
@@ -174,9 +199,39 @@ class CedarPep:
             )
         except OSError as exc:
             raise PepError(f"cannot start the Cedar PDP: {exc}") from exc
+        self._start_stderr_drain(self._proc)
         # Startup loads and compiles the WASM bundle; give it more than one decision's
         # 500 ms budget. Per-decision deadlines stay at self.timeout.
         self.meta = self._request({"op": "ping"}, timeout=max(self.timeout, 2.0))
+
+    def _start_stderr_drain(self, proc: subprocess.Popen[bytes]) -> None:
+        """Drain one PDP process' stderr into the bounded tail.
+
+        The thread owns the read end of the pipe (so `close()` never closes a fd it
+        is blocked on), exits on EOF, and swallows every error: a diagnostic path
+        must never raise into the PEP or wedge a decision.
+        """
+        stream = proc.stderr
+        with self._stderr_lock:
+            self._stderr_chunks.clear()
+        if stream is None:
+            return
+
+        def drain() -> None:
+            try:
+                with stream:
+                    while True:
+                        chunk = stream.read(STDERR_CHUNK_BYTES)
+                        if not chunk:
+                            return
+                        with self._stderr_lock:
+                            self._stderr_chunks.append(chunk)
+            except Exception:  # noqa: BLE001 - pipe closed by close(), or worse
+                # A diagnostic path must never raise into the PEP, and it must not
+                # leak the descriptor when the read end is already gone.
+                return
+
+        threading.Thread(target=drain, name="cedar-pdp-stderr", daemon=True).start()
 
     def _restart(self) -> None:
         """Respawn the PDP after a violation, bounded by a restart budget."""
@@ -210,7 +265,9 @@ class CedarPep:
         except subprocess.TimeoutExpired:
             proc.kill()
             proc.wait()
-        for stream in (proc.stdout, proc.stderr):
+        for stream in (proc.stdout,):
+            # stderr is deliberately absent: the drain thread owns that descriptor
+            # and closes it on EOF, so closing it here would race a blocked read.
             if stream is not None:
                 with contextlib.suppress(OSError):
                     stream.close()
@@ -276,6 +333,18 @@ class CedarPep:
             )
         return decision
 
+    async def authorize_async(self, tool: ToolSpec, **kwargs: Any) -> Decision:
+        """Run one decision off the event loop.
+
+        `authorize()` is a blocking critical section: it writes to the PDP pipe,
+        waits on it with `select()` until the deadline, and holds the request lock
+        the whole time. Called directly from `async def _authorized_call()` it would
+        stall every other MCP session in this process for up to `self.timeout`
+        seconds per tool call. The synchronous form stays the public API - the
+        offline tests and the stdio path both call it directly.
+        """
+        return await asyncio.to_thread(self.authorize, tool, **kwargs)
+
     @staticmethod
     def _decision(response: Mapping[str, Any]) -> Decision:
         result = response.get("decision")
@@ -300,50 +369,74 @@ class CedarPep:
     def _request(
         self, payload: Mapping[str, Any], *, timeout: float | None = None
     ) -> dict[str, Any]:
-        if self._proc is None or self._proc.poll() is not None:
-            # Violation or crash: respawn under the restart budget, then retry once.
-            self._restart()
-        proc = self._proc
-        if proc is None or proc.stdin is None or proc.stdout is None:
-            raise PdpError("the Cedar PDP process is not running")
-        timeout_s = self.timeout if timeout is None else timeout
-        try:
-            proc.stdin.write(json.dumps(payload).encode("utf-8") + b"\n")
-            proc.stdin.flush()
-        except OSError as exc:
-            self.close()
-            raise PdpError(f"cannot write to the Cedar PDP: {exc}") from exc
-        try:
-            line = self._read_line(proc, timeout_s)
-        except _DeadlineExceeded:
-            # Kills the wedged PDP; the next request restarts it (budgeted).
-            self.close()
-            raise PdpError(f"the Cedar PDP exceeded {timeout_s * 1000:.0f} ms") from None
-        except _ResponseTooLarge:
-            self.close()
-            raise PdpError(
-                f"the Cedar PDP response exceeded {MAX_RESPONSE_BYTES} bytes"
-            ) from None
-        try:
-            response = json.loads(line)
-        except json.JSONDecodeError as exc:
-            raise PdpError(f"the Cedar PDP returned malformed JSON: {exc}") from exc
-        if not isinstance(response, dict) or not response.get("ok"):
-            error = response.get("error") if isinstance(response, dict) else None
-            detail = (
-                (response.get("detail") or response.get("errors"))
-                if isinstance(response, dict)
-                else response
-            )
-            raise PdpError(f"Cedar PDP refused ({error}): {detail}")
-        return response
+        # One long-lived PDP behind one pipe means a response is only meaningful
+        # if it answers *this* request. pdp.mjs echoes requestId on every branch
+        # (ping, validate, authorize, unknown-op), so correlation needs no change
+        # on the Node side.
+        request_id = uuid.uuid4().hex
+        payload = {**payload, "requestId": request_id}
+        # The write, the deadline-bounded read, the decode, the correlation test and
+        # the kill-on-violation below form ONE critical section. Without it,
+        # concurrent authorize() calls interleave on a single stream - one caller
+        # reads a peer's response - and several can spend the restart budget or steal
+        # the same lazy restart. The lock lives here rather than in authorize() so
+        # the CedarPep.__new__ test doubles, which replace _request outright, keep
+        # working without a lock attribute.
+        with self._io_lock:
+            if self._proc is None or self._proc.poll() is not None:
+                # Violation or crash: respawn under the restart budget, then retry.
+                self._restart()
+            proc = self._proc
+            if proc is None or proc.stdin is None or proc.stdout is None:
+                raise PdpError("the Cedar PDP process is not running")
+            timeout_s = self.timeout if timeout is None else timeout
+            try:
+                proc.stdin.write(json.dumps(payload).encode("utf-8") + b"\n")
+                proc.stdin.flush()
+            except OSError as exc:
+                self.close()
+                raise PdpError(f"cannot write to the Cedar PDP: {exc}") from exc
+            try:
+                line = self._read_line(proc, timeout_s)
+            except _DeadlineExceeded:
+                # Kills the wedged PDP; the next request restarts it (budgeted).
+                self.close()
+                raise PdpError(f"the Cedar PDP exceeded {timeout_s * 1000:.0f} ms") from None
+            except _ResponseTooLarge:
+                self.close()
+                raise PdpError(
+                    f"the Cedar PDP response exceeded {MAX_RESPONSE_BYTES} bytes"
+                ) from None
+            try:
+                response = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise PdpError(f"the Cedar PDP returned malformed JSON: {exc}") from exc
+            if not isinstance(response, dict) or not response.get("ok"):
+                error = response.get("error") if isinstance(response, dict) else None
+                detail = (
+                    (response.get("detail") or response.get("errors"))
+                    if isinstance(response, dict)
+                    else response
+                )
+                raise PdpError(f"Cedar PDP refused ({error}): {detail}")
+            if response.get("requestId") != request_id:
+                # An absent or foreign id means the stream is not answering this
+                # request, so the payload cannot be trusted either way: treat it as a
+                # framing violation and let the budgeted restart resynchronise.
+                self.close()
+                raise PdpError("the Cedar PDP response did not match the request")
+            return response
 
     def _read_line(self, proc: subprocess.Popen[bytes], timeout_s: float) -> bytes:
-        """Read one newline-delimited response, deadline-bounded.
+        """Read one newline-delimited response, deadline-bounded and size-bounded.
 
         The pipes are raw (bufsize=0), so select() and read() see exactly the same
         bytes; a partial line can never block past the deadline. readline() on a
         buffered text stream could hang forever on an unterminated partial line.
+
+        The deadline and the size bound are control-dependent on the same select
+        loop: every read is bounded by `remaining`, and every chunk is measured
+        against MAX_RESPONSE_BYTES before the loop decides the line is complete.
         """
         stdout = proc.stdout
         assert stdout is not None  # noqa: S101 - type narrowing; _request guards the process
@@ -365,24 +458,34 @@ class CedarPep:
             if not chunk:
                 raise PdpError(f"the Cedar PDP exited: {self._stderr_tail()}")
             buffer.extend(chunk)
-            if b"\n" not in buffer and len(buffer) > MAX_RESPONSE_BYTES:
+            # The size bound is checked on every chunk, before the newline test.
+            # Guarding it with `b"\n" not in buffer` let a single chunk that both
+            # exceeds MAX_RESPONSE_BYTES and terminates the line leave the loop and
+            # return the oversized payload for parsing.
+            if len(buffer) > MAX_RESPONSE_BYTES:
                 raise _ResponseTooLarge()
         newline = buffer.find(b"\n")
-        if buffer[newline + 1:]:
+        tail = buffer[newline + 1:]
+        if tail:
             # More than one response per request is a framing violation; the stream
             # is untrustworthy, so kill the PDP (the budgeted restart fixes framing).
+            if len(tail) > MAX_RESPONSE_BYTES:
+                # A post-newline flood is a size violation first: bound it with the
+                # same limit instead of trusting the tail length.
+                raise _ResponseTooLarge()
             self.close()
             raise PdpError("the Cedar PDP streamed trailing bytes after the response")
         return bytes(buffer[:newline])
 
     def _stderr_tail(self) -> str:
-        proc = self._proc
-        if proc is None or proc.stderr is None:
-            return ""
-        try:
-            return (proc.stderr.read() or b"").decode("utf-8", "replace").strip()[-400:]
-        except (OSError, ValueError):
-            return ""
+        """The last bytes the PDP wrote to stderr, from the drain thread's buffer.
+
+        Never blocks: reading the live pipe here would hold the request lock for as
+        long as the PDP takes to exit.
+        """
+        with self._stderr_lock:
+            chunks = list(self._stderr_chunks)
+        return b"".join(chunks).decode("utf-8", "replace").strip()[-STDERR_TAIL_LIMIT:]
 
     # -- audit -----------------------------------------------------------
     def _audit(

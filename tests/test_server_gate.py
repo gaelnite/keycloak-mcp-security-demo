@@ -37,6 +37,11 @@ class _RecordingPep:
         self.calls += 1
         return Decision("deny", reasons=("test-deny",))
 
+    async def authorize_async(self, *args, **kwargs):
+        # The server awaits this form: a blocking authorize() on the event loop
+        # would stall every other session. See mcp/pep.py::authorize_async.
+        return self.authorize(*args, **kwargs)
+
     def audit_rejection(self, tool, principal_type, principal_id, realm, *, reason, detail,
                         approval_jti=None):
         if self.audit_error is not None:

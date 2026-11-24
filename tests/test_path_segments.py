@@ -66,6 +66,9 @@ class _AllowPep:
         self.realms.append(realm)
         return Decision("allow", reasons=("test-allow",))
 
+    async def authorize_async(self, spec, **kwargs):
+        return self.authorize(spec, **kwargs)
+
     def audit_rejection(self, tool, principal_type, principal_id, realm, *, reason, detail,
                         approval_jti=None):
         self.rejections.append({"tool": tool.name, "principal_type": principal_type,
