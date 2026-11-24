@@ -177,7 +177,8 @@ class ServerGateTests(unittest.TestCase):
         """An interactive token reaches Cedar as the human, with Keycloak's own roles.
 
         `mcp_roles` decides which tools the server even offers (the entitlement gate
-        above the PEP); `realm_access.roles` is what Cedar sees, so a client-side claim
+        above the PEP) and is the role set Cedar sees for this interactive user.
+        `realm_access.roles` is reserved for machine clients, so a client-side claim
         cannot impersonate a Keycloak role assignment.
         """
         server._CLAIMS.set(

@@ -15,7 +15,7 @@ when {
   && principal.scopes.contains(resource.requiredScope)
   && principal in context.resource.realm
   && (resource.extension == "core" || context.extensions.contains(resource.extension))
-  && (!(principal is KeycloakMCP::User) || principal.roles.contains("mcp-clients-read"))
+  && principal.roles.contains("mcp-clients-read")
 };
 
 @id("kc-read-get-client")
@@ -30,7 +30,7 @@ when {
   && principal.scopes.contains(resource.requiredScope)
   && principal in context.resource.realm
   && (resource.extension == "core" || context.extensions.contains(resource.extension))
-  && (!(principal is KeycloakMCP::User) || principal.roles.contains("mcp-clients-read"))
+  && principal.roles.contains("mcp-clients-read")
 };
 
 @id("kc-read-list-users")
@@ -45,7 +45,7 @@ when {
   && principal.scopes.contains(resource.requiredScope)
   && principal in context.resource.realm
   && (resource.extension == "core" || context.extensions.contains(resource.extension))
-  && (!(principal is KeycloakMCP::User) || principal.roles.contains("mcp-users-read"))
+  && principal.roles.contains("mcp-users-read")
 };
 
 @id("kc-read-get-user")
@@ -60,7 +60,7 @@ when {
   && principal.scopes.contains(resource.requiredScope)
   && principal in context.resource.realm
   && (resource.extension == "core" || context.extensions.contains(resource.extension))
-  && (!(principal is KeycloakMCP::User) || principal.roles.contains("mcp-users-read"))
+  && principal.roles.contains("mcp-users-read")
 };
 
 @id("kc-read-get-extension-inventory")

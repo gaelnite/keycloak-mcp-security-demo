@@ -230,6 +230,23 @@ class PepDecisionTests(unittest.TestCase):
         self.assertEqual(request["resource"]["id"], "get_extension_inventory")
         self.assertEqual(request["principal"]["id"], client_principal().id)
 
+    def test_client_realm_roles_are_sent_as_pdp_facts(self) -> None:
+        principal = ClientPrincipal(
+            ISSUER,
+            "mcp-client",
+            "lab",
+            frozenset({USERS_READ.scope}),
+            frozenset({USERS_READ.role}),
+        )
+        fake = FakePdp()
+        make_pep(fake).authorize(
+            _tool("list_users"),
+            principal=principal,
+            realm="lab",
+            extensions=["core"],
+        )
+        self.assertEqual(fake.requests[0]["client"]["attrs"]["roles"], [USERS_READ.role])
+
     def test_deny_is_returned_without_failing_closed(self) -> None:
         decision = make_pep(FakePdp(decision="deny")).authorize(
             _tool("get_extension_inventory"),

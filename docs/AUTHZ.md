@@ -19,10 +19,9 @@ SPIFFE provider.
 
 The default MCP configuration requires an HTTPS Keycloak issuer, an audience
 and an explicit client allowlist; it uses the issuer's HTTPS JWKS endpoint by
-default. It has no anonymous token or client fallback. The headless profile maps
-its workload client to a Cedar client entity;
-interactive clients become user principals derived from verified issuer and
-subject.
+default. It has no anonymous token or client fallback. Headless workload clients
+and interactive users become runtime principals synthesized from verified token
+claims; no client-to-entity map or seeded principal is consulted.
 
 ## Request checks
 
@@ -32,7 +31,7 @@ subject.
 | Issuer and audience | Configured issuer and audience; `KC_MCP_RESOURCE_URL`, when used, must exactly match `KC_AUDIENCE`. |
 | Time and size | `exp`, `iat` and optional `nbf` checked with configured clock skew; token size is capped. |
 | Client | `azp` or `client_id` must exactly match `KC_ALLOWED_CLIENT_IDS` or its file. URL-form IDs are validated and preserved without normalization. |
-| Permission | The actual access-token grant and, for interactive users, the Keycloak entitlement role are checked before Cedar. |
+| Permission | The actual access-token grant is checked before Cedar. Capability roles are enforced by Cedar: consented `mcp_roles` for interactive users, `realm_access.roles` for machines. |
 | Realm and target | Interactive requests are pinned to the verified realm; path arguments are validated before policy evaluation and dispatch. |
 
 The authorization code flow in the desktop profile uses PKCE S256, exact
@@ -43,9 +42,9 @@ Dynamic CIMD admission is disabled in that profile.
 
 `mcp/tool_registry.py` is the source of truth for tool scope, tier, extension and
 policy ID. `mcp/gen_cedar.py` generates the checked-in Cedar bundle from that
-registry. Policies deny unknown tools, cross-realm principals, missing scopes,
-missing extensions and disabled or unapproved writes. Interactive tools are
-filtered at discovery and checked again when called.
+registry. Policies deny unknown tools, cross-realm principals, missing scopes or
+capability roles, missing extensions and disabled or unapproved writes.
+Interactive tools are filtered at discovery and checked again when called.
 
 The PEP validates the Cedar schema, policies and entities at startup. Its PDP
 deadline defaults to 500 ms (configurable up to 2,000 ms). Startup, timeout,

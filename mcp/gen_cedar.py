@@ -57,7 +57,7 @@ def _permits() -> str:
             if tool.write:
                 conditions.append(f"principal is KeycloakMCP::User && {entitlement}")
             else:
-                conditions.append(f"(!(principal is KeycloakMCP::User) || {entitlement})")
+                conditions.append(entitlement)
         if tool.tier == WRITE:
             conditions.extend(
                 [

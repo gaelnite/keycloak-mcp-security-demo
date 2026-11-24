@@ -168,7 +168,7 @@ class ClientPrincipal:
     from `KC_MCP_CLIENT_ENTITY_MAP` and its scopes and admin flag came from whichever
     fixture happened to be seeded in the bundle. A client's authority is now whatever the
     token says - the verifier's allowlist still decides whether that token is accepted at
-    all, and the policy still decides what those scopes permit.
+    all, and the policy still decides what those scopes and realm roles permit.
     """
 
     issuer: str
@@ -204,6 +204,7 @@ class ClientPrincipal:
             "attrs": {
                 "clientId": self.client_id,
                 "scopes": sorted(self.scopes),
+                "roles": sorted(self.roles),
                 "admin": self.admin,
             },
         }

@@ -22,6 +22,7 @@ namespace KeycloakMCP {
   entity Client in [Realm] = {
     "clientId": String,
     "scopes": Set<String>,
+    "roles": Set<String>,
     "admin": Bool,
   };
 

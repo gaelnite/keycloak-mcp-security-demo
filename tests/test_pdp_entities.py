@@ -47,8 +47,13 @@ def user_attrs(scopes=(USERS_READ,), roles=("mcp-users-read",), admin=False, **o
     return attrs
 
 
-def client_attrs(scopes=(EXTENSIONS_READ,), admin=False, **overrides) -> dict:
-    attrs = {"clientId": "runtime-client", "scopes": sorted(scopes), "admin": admin}
+def client_attrs(scopes=(EXTENSIONS_READ,), roles=(), admin=False, **overrides) -> dict:
+    attrs = {
+        "clientId": "runtime-client",
+        "scopes": sorted(scopes),
+        "roles": sorted(roles),
+        "admin": admin,
+    }
     attrs.update(overrides)
     return attrs
 
@@ -184,6 +189,30 @@ class PdpEntityStoreTests(PdpAssertions):
         )
         self.assertEqual(response["decision"], "allow")
         self.assertIn("kc-read-get-extension-inventory", response["determiningPolicies"])
+
+    def test_machine_reads_require_the_realm_capability_role(self) -> None:
+        cases = (
+            ("no-role", (), "deny"),
+            ("wrong-role", ("mcp-clients-read",), "deny"),
+            ("authorised", ("mcp-users-read",), "allow"),
+        )
+        for subject, roles, expected in cases:
+            with self.subTest(subject=subject):
+                response = self.evaluate(
+                    principal={
+                        "type": "KeycloakMCP::Client",
+                        "id": f"oidc:runtime:{subject}",
+                    },
+                    client={
+                        "realm": "lab",
+                        "attrs": client_attrs(scopes=(USERS_READ,), roles=roles),
+                    },
+                    tool=LIST_USERS,
+                )
+                self.assertEqual(response["errors"], [])
+                self.assertEqual(response["decision"], expected)
+                if expected == "allow":
+                    self.assertIn("kc-read-list-users", response["determiningPolicies"])
 
     def test_authority_comes_from_the_request_attrs(self) -> None:
         cases = (
