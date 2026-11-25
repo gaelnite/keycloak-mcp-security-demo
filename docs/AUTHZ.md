@@ -2,7 +2,7 @@
 
 This reference server verifies Keycloak access tokens, checks the caller's issued
 scope, then asks Cedar whether the registered tool may run for that principal,
-realm, extension and approval state. A Cedar permit alone cannot bypass a
+realm and approval state. A Cedar permit alone cannot bypass a
 missing token scope or entitlement.
 
 ## Checked-in deployment profiles
@@ -40,10 +40,10 @@ Dynamic CIMD admission is disabled in that profile.
 
 ## Cedar and failure behavior
 
-`mcp/tool_registry.py` is the source of truth for tool scope, tier, extension and
+`mcp/tool_registry.py` is the source of truth for tool scope, tier and
 policy ID. `mcp/gen_cedar.py` generates the checked-in Cedar bundle from that
 registry. Policies deny unknown tools, cross-realm principals, missing scopes or
-capability roles, missing extensions and disabled or unapproved writes.
+capability roles, and disabled or unapproved writes.
 Interactive tools are filtered at discovery and checked again when called.
 
 The PEP validates the Cedar schema, policies and entities at startup. Its PDP

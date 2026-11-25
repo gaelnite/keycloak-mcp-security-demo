@@ -36,7 +36,6 @@ def _https_base(raw: str) -> str:
 class ServerConfig:
     auth: KeycloakAuthConfig
     base_url: str
-    extensions: frozenset[str]
     writes_enabled: bool
     audit_log: str | None
     approval: ApprovalVerifier | None
@@ -48,11 +47,6 @@ class ServerConfig:
         values = dict(os.environ if env is None else env)
         auth = KeycloakAuthConfig.from_env(values)
         base_url = _https_base(values.get("KC_URL") or "")
-        extensions = frozenset(
-            part.strip()
-            for part in (values.get("KC_EXTENSIONS") or "core").replace(",", " ").split()
-            if part.strip()
-        )
         try:
             approval = ApprovalVerifier.from_env(values)
         except ApprovalError as exc:
@@ -77,7 +71,6 @@ class ServerConfig:
         return cls(
             auth=auth,
             base_url=base_url,
-            extensions=extensions,
             writes_enabled=writes_enabled,
             audit_log=(values.get("KC_MCP_AUDIT_LOG") or "").strip() or None,
             approval=approval,
@@ -95,7 +88,7 @@ class ServerConfig:
             "allowed_client_ids": sorted(self.auth.allowed_client_ids),
             "interactive_client_ids": sorted(self.auth.interactive_client_ids),
             "base_url": self.base_url,
-            "extensions": sorted(self.extensions),
+            "extensions": ["core"],
             "writes_enabled": self.writes_enabled,
             "delegation_configured": self.delegation is not None,
             "approval_configured": self.approval is not None,

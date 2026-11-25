@@ -159,9 +159,9 @@ class ApprovalVerifier:
         tool: str,
         action: str,
         target: str,
-        subject: str | None = None,
-        realm: str | None = None,
-        locale: str | None = None,
+        subject: str,
+        realm: str,
+        locale: str,
     ) -> ApprovalFacts:
         if not isinstance(token, str) or len(token) > 4096 or token.count(".") != 2:
             raise ApprovalError(
@@ -189,7 +189,7 @@ class ApprovalVerifier:
         issued, expires = claims["iat"], claims["exp"]
         if (
             not isinstance(issued, int) or not isinstance(expires, int)
-            or issued > now + (0 if subject is not None else 60)
+            or issued > now
             or expires <= now or not 0 < expires - issued <= self.max_ttl
         ):
             raise ApprovalError(
@@ -217,8 +217,9 @@ class ApprovalVerifier:
                 "the approval token is bound to a different target; request a new approval",
                 jti=jti,
             )
-        if subject is not None and (
-            claims["sub"] != subject or claims.get("realm") != realm or claims.get("locale") != locale
+        if (
+            any(not isinstance(value, str) or not value.strip() for value in (subject, realm, locale))
+            or claims["sub"] != subject or claims.get("realm") != realm or claims.get("locale") != locale
             or claims.get("aud") != self.audience
         ):
             raise ApprovalError("The approval is bound to a different user, realm or locale", jti=jti)

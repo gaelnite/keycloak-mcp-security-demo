@@ -1,11 +1,4 @@
-"""Extension-aware tool registry for the Keycloak MCP reference server.
-
-Pure stdlib so the policy tests can run without the MCP SDK or network. Every tool
-declares the Keycloak scope it needs, the Cedar policy that authorizes it (the
-``policy_id`` must exist in ``cedar/policies.cedar``) and the extension that owns it.
-``extension == "core"`` is always available; any other value must appear in the
-server's installed-extension set or the Cedar policy denies the call.
-"""
+"""Tool registry for the Keycloak MCP reference server."""
 
 from __future__ import annotations
 
@@ -13,11 +6,7 @@ from dataclasses import dataclass
 
 READ = "read"
 WRITE = "write"
-ADMIN = "admin"
-TIERS = (READ, WRITE, ADMIN)
-
-# Extension names are the inventory keys used by the server and by Cedar entities.
-EXTENSIONS = ("core",)
+TIERS = (READ, WRITE)
 
 
 @dataclass(frozen=True)
@@ -54,7 +43,6 @@ class ToolSpec:
     scopes: tuple[str, ...]
     policy_id: str
     tier: str
-    extension: str = "core"
     write: bool = False
     capability: Capability | None = None
     arguments: tuple[ToolArgument, ...] = ()
@@ -62,8 +50,6 @@ class ToolSpec:
     def __post_init__(self) -> None:
         if self.tier not in TIERS:
             raise ValueError(f"{self.name}: unknown tier {self.tier!r}")
-        if self.extension not in EXTENSIONS:
-            raise ValueError(f"{self.name}: unknown extension {self.extension!r}")
         if self.tier == WRITE and not self.write:
             raise ValueError(f"{self.name}: write-tier tools must set write=True")
         if not self.scopes:
@@ -81,7 +67,6 @@ def _spec(
     tier: str,
     *,
     arguments: tuple[ToolArgument, ...] = (),
-    extension: str = "core",
 ) -> ToolSpec:
     capability = scope if isinstance(scope, Capability) else None
     return ToolSpec(
@@ -90,7 +75,6 @@ def _spec(
         scopes=(capability.scope if capability else scope,),
         policy_id=f"kc-{tier}-{name.replace('_', '-')}",
         tier=tier,
-        extension=extension,
         write=(tier == WRITE),
         capability=capability,
         arguments=arguments,
@@ -124,16 +108,6 @@ TOOLS: tuple[ToolSpec, ...] = (
 TOOLS_BY_NAME = {tool.name: tool for tool in TOOLS}
 READ_TOOLS = tuple(tool for tool in TOOLS if tool.tier == READ)
 WRITE_TOOLS = tuple(tool for tool in TOOLS if tool.write)
-ADMIN_TOOLS = tuple(tool for tool in TOOLS if tool.tier == ADMIN)
-
-
-def tools_for_extensions(installed: frozenset[str] | set[str]) -> tuple[ToolSpec, ...]:
-    """Tools whose owning extension is installed (core always is)."""
-    return tuple(
-        tool
-        for tool in TOOLS
-        if tool.extension == "core" or tool.extension in installed
-    )
 
 
 def policy_ids() -> tuple[str, ...]:

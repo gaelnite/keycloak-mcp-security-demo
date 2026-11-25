@@ -1,4 +1,4 @@
-# Root-context Podman builds need only the MCP runtime and Cedar policy.
+# Root-context container builds need only the MCP runtime and Cedar policy.
 **
 !mcp/*.py
 !mcp/*.mjs
