@@ -24,7 +24,6 @@
       "name": "list_clients",
       "requiredScope": "keycloak.clients.read",
       "tier": "read",
-      "extension": "core",
       "write": false
     },
     "parents": []
@@ -38,7 +37,6 @@
       "name": "get_client",
       "requiredScope": "keycloak.clients.read",
       "tier": "read",
-      "extension": "core",
       "write": false
     },
     "parents": []
@@ -52,7 +50,6 @@
       "name": "list_users",
       "requiredScope": "keycloak.users.read",
       "tier": "read",
-      "extension": "core",
       "write": false
     },
     "parents": []
@@ -66,7 +63,6 @@
       "name": "get_user",
       "requiredScope": "keycloak.users.read",
       "tier": "read",
-      "extension": "core",
       "write": false
     },
     "parents": []
@@ -80,7 +76,6 @@
       "name": "get_extension_inventory",
       "requiredScope": "keycloak.extensions.read",
       "tier": "read",
-      "extension": "core",
       "write": false
     },
     "parents": []
@@ -94,7 +89,6 @@
       "name": "set_user_locale",
       "requiredScope": "keycloak.users.locale.write",
       "tier": "write",
-      "extension": "core",
       "write": true
     },
     "parents": []

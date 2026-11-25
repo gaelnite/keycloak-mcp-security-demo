@@ -186,8 +186,7 @@ class GateValidationTests(unittest.TestCase):
                 client_id="https://cimd.lab.local:8444/client-metadata.json",
                 scopes=frozenset({"keycloak.users.read"}),
                 realm="lab",
-                admin=False,
-                expires_at=9_999_999_999,
+                    expires_at=9_999_999_999,
                 issuer=self.config.auth.issuer,
                 audience=self.config.auth.audience,
             )

@@ -2,7 +2,7 @@
 
 Offline tests (CI-safe): Section 3 grammar and Section 10.1 identifier-equality rules
 applied to URL-form entries in KC_ALLOWED_CLIENT_IDS / KC_ALLOWED_CLIENT_IDS_FILE.
-The live AS-side lifecycle behavior is characterized in tests/test_cimd_lifecycle.py.
+These tests cover local client metadata URL validation.
 """
 
 from __future__ import annotations
