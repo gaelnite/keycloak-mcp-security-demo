@@ -85,7 +85,7 @@ def _token(private, *, jti="jti-1", target=TARGET, tool=TOOL, action=ACTION,
     exp = iat + 300 if exp is None else exp
     return jwt.encode(
         {"iss": iss, "aud": aud, "sub": "fixture-operator", "jti": jti, "iat": iat, "exp": exp,
-         "tool": tool, "action": action, "target": target, **binding},
+         "tool": tool, "action": action, "target": target, "realm": "lab", "locale": "de", **binding},
         private, algorithm="EdDSA",
     )
 
@@ -100,7 +100,8 @@ class _VerifierCase(unittest.TestCase):
         )
 
     def verify(self, token, *, tool=TOOL, action=ACTION, target=TARGET):
-        return self.verifier.verify(token, tool=tool, action=action, target=target)
+        return self.verifier.verify(token, tool=tool, action=action, target=target,
+                                    subject="fixture-operator", realm="lab", locale="de")
 
 
 class ApprovalSingleUseTests(_VerifierCase):
@@ -136,6 +137,37 @@ class ApprovalSingleUseTests(_VerifierCase):
             self.verify(token)
         good = _token(self.private, jti="keepme")
         self.assertTrue(self.verify(good).verified)
+
+
+class ApprovalBindingTests(_VerifierCase):
+    def test_request_bindings_are_required(self) -> None:
+        token = _token(self.private)
+        with self.assertRaises(TypeError):
+            self.verifier.verify(token, tool=TOOL, action=ACTION, target=TARGET)
+        for field in ("subject", "realm", "locale"):
+            bindings = {"subject": "fixture-operator", "realm": "lab", "locale": "de"}
+            bindings[field] = ""
+            with self.subTest(field=field), self.assertRaises(ApprovalError):
+                self.verifier.verify(token, tool=TOOL, action=ACTION, target=TARGET, **bindings)
+        self.assertTrue(self.verify(token).verified)
+
+    def test_claim_bindings_must_match_without_consuming_jti(self) -> None:
+        for field in ("sub", "realm", "locale"):
+            token = _token(self.private, **{field: "different"})
+            with self.subTest(field=field), self.assertRaises(ApprovalError) as error:
+                self.verify(token)
+            self.assertEqual(error.exception.jti, "jti-1")
+        self.assertTrue(self.verify(_token(self.private)).verified)
+
+    def test_missing_claims_are_rejected_with_jti(self) -> None:
+        for field in ("realm", "locale"):
+            claims = jwt.decode(_token(self.private), options={"verify_signature": False})
+            del claims[field]
+            token = jwt.encode(claims, self.private, algorithm="EdDSA")
+            with self.subTest(field=field), self.assertRaises(ApprovalError) as error:
+                self.verify(token)
+            self.assertEqual(error.exception.jti, "jti-1")
+        self.assertTrue(self.verify(_token(self.private)).verified)
 
 
 class ApprovalWildcardTests(_VerifierCase):
@@ -174,8 +206,8 @@ class ApprovalTtlTests(_VerifierCase):
             self.verify(token)
         self.assertIn("expired or its lifetime is too long", str(ctx.exception))
 
-    def test_future_iat_beyond_skew_denied(self) -> None:
-        token = _token(self.private, iat=self.clock() + 61, exp=self.clock() + 361)
+    def test_future_iat_denied(self) -> None:
+        token = _token(self.private, iat=self.clock() + 1, exp=self.clock() + 301)
         with self.assertRaises(ApprovalError):
             self.verify(token)
 
@@ -319,7 +351,7 @@ class ServerApprovalWiringTests(unittest.TestCase):
             subject="fixture-requester",
             client_id="https://cimd.lab.local:8444/client-metadata.json",
             scopes=frozenset({USER_LOCALE.scope}), roles=frozenset({USER_LOCALE.role}),
-            realm="lab", admin=False, expires_at=9_999_999_999, interactive=True,
+            realm="lab", expires_at=9_999_999_999, interactive=True,
             issuer=base.auth.issuer, audience=base.auth.audience,
         )
         server._CLAIMS.set(claims)

@@ -43,7 +43,7 @@ class DelegationTests(unittest.IsolatedAsyncioTestCase):
         self.config = DelegationConfig(auth, "https://localhost:8801", certifi.where(), "mcp.demo", "/socket", "/exe")
         self.calls = []
         self.caller = TokenClaims(
-            subject="subject", client_id=DESKTOP, scopes=frozenset({USERS_READ.scope}), realm="lab", admin=False,
+            subject="subject", client_id=DESKTOP, scopes=frozenset({USERS_READ.scope}), realm="lab",
             expires_at=time.time() + 120, issuer=ISSUER, audience=RESOURCE,
             roles=frozenset({USERS_READ.role}), interactive=True,
         )

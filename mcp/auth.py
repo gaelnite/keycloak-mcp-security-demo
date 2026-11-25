@@ -182,7 +182,6 @@ class KeycloakAuthConfig:
     clock_skew: int = 60
     jwks_ttl: float = 300.0
     jwks_min_refresh: float = 30.0
-    admin_role: str = "mcp-admin"
     protected_resource: ProtectedResource | None = None
     interactive_client_ids: frozenset[str] = frozenset()
 
@@ -270,7 +269,6 @@ class KeycloakAuthConfig:
             clock_skew=skew,
             jwks_ttl=ttl,
             jwks_min_refresh=min_refresh,
-            admin_role=(values.get("KC_ADMIN_ROLE") or "mcp-admin").strip(),
             protected_resource=protected_resource,
             interactive_client_ids=interactive_clients,
         )
@@ -282,7 +280,6 @@ class TokenClaims:
     client_id: str
     scopes: frozenset[str]
     realm: str
-    admin: bool
     expires_at: float
     issuer: str
     audience: str
@@ -586,7 +583,6 @@ class KeycloakTokenVerifier:
             client_id=client_id,
             scopes=scopes,
             realm=realm,
-            admin=not interactive and isinstance(roles, list) and self.config.admin_role in roles,
             expires_at=float(claims["exp"]),
             issuer=self.config.issuer,
             audience=self.config.audience,

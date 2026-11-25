@@ -8,10 +8,12 @@
         "stdio"
       ],
       "env": {
-        "KC_URL": "https://localhost:8443",
-        "KC_ISSUER": "https://localhost:8443/realms/lab",
-        "KC_AUDIENCE": "https://localhost:8800/mcp",
-        "KC_ALLOWED_CLIENT_IDS_FILE": "/home/you/.config/keycloak-mcp/allowed-clients.txt",
+        "SSL_CERT_FILE": "/path/to/demo-ca.pem",
+        "KC_URL": "https://localhost:49443",
+        "KC_ISSUER": "https://localhost:49443/realms/lab",
+        "KC_AUDIENCE": "https://localhost:49443/mcp",
+        "KC_MCP_RESOURCE_URL": "https://localhost:49443/mcp",
+        "KC_ALLOWED_CLIENT_IDS": "mcp-workload",
         "KC_MCP_ACCESS_TOKEN_FILE": "/home/you/.config/keycloak-mcp/access-token",
         "KC_MCP_ENABLE_WRITES": "0",
         "KC_MCP_AUDIT_LOG": "/home/you/.local/state/keycloak-mcp/authz-audit.jsonl",
@@ -19,7 +21,7 @@
       }
     },
     "keycloak-mcp-http": {
-      "url": "http://127.0.0.1:8800/mcp",
+      "url": "https://localhost:49443/mcp",
       "headers": {
         "Authorization": "Bearer ${KC_MCP_ACCESS_TOKEN}"
       }

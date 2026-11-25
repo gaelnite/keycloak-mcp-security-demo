@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Extension-aware Keycloak MCP server with Cedar authorization.
+"""Keycloak MCP server with Cedar authorization.
 
 Run:
     python3 mcp/server.py --transport stdio
@@ -109,7 +109,7 @@ def principal_for(claims: TokenClaims) -> Principal:
     """The Cedar principal for a verified token, and nothing else.
 
     A human whose token carries delegated authority is the subject themself; any other
-    accepted token is its own client. Realm, scopes, roles and the admin flag are the
+    accepted token is its own client. Realm, scopes and roles are the
     claims the verifier checked - never a row in `entities.json` and never a mapping an
     operator has to keep in sync with Keycloak. The realm the request *targets* is not
     part of the principal: it goes to the PEP separately so cross-realm calls can be
@@ -131,7 +131,6 @@ def principal_for(claims: TokenClaims) -> Principal:
             realm=claims.realm,
             scopes=scopes,
             roles=roles,
-            admin=claims.admin,
         )
     return ClientPrincipal(
         issuer=claims.issuer,
@@ -139,7 +138,6 @@ def principal_for(claims: TokenClaims) -> Principal:
         realm=claims.realm,
         scopes=scopes,
         roles=roles,
-        admin=claims.admin,
     )
 
 
@@ -345,7 +343,6 @@ async def _authorized_call(spec: ToolSpec, **kwargs: Any) -> Any:
         spec,
         principal=actor,
         realm=realm,
-        extensions=runtime.config.extensions,
         writes_enabled=runtime.config.writes_enabled,
         approval=approval,
     )
@@ -389,8 +386,6 @@ def _register_tools(mcp: FastMCP, config: ServerConfig) -> list[str]:
         if config.tool_allowlist is not None and spec.name not in config.tool_allowlist:
             continue
         if spec.write and not config.writes_enabled:
-            continue
-        if spec.extension != "core" and spec.extension not in config.extensions:
             continue
         mcp.tool(name=spec.name, description=spec.description)(TOOL_FUNCTIONS[spec.name])
         registered.append(spec.name)
@@ -658,7 +653,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     app = build_http_app(mcp, verifier)
     config_uvicorn = uvicorn.Config(app, host=args.host, port=args.port, log_level="warning")
     print(
-        f"keycloak-mcp: http 127.0.0.1:{args.port}, realm={config.auth.realm}, "
+        f"keycloak-mcp: http {'[' + args.host + ']' if ':' in args.host else args.host}:{args.port}, "
+        f"realm={config.auth.realm}, "
         f"tools={len(registered)}",
         file=sys.stderr,
     )

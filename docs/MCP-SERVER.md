@@ -50,7 +50,6 @@ KC_MCP_ACCESS_TOKEN_FILE=/secure/path/access-token \
 | `KC_ALLOWED_CLIENT_IDS` / `_FILE` | Required; no wildcard | Exact authorized client IDs, one per line in the file. URL-form IDs are validated without normalization. |
 | `KC_JWKS_URL` | Issuer cert endpoint | HTTPS JWKS only; no redirects, a 256 KiB streaming bound, and the request never uses an ambient proxy. |
 | `KC_MCP_INTERACTIVE_CLIENT_IDS` | Unset | Allowlisted user clients that use verified entitlements and per-subject principals. Requires the canonical resource URL. |
-| `KC_EXTENSIONS` | `core` | Inventory labels. The six maintained tools are all core tools. |
 | `KC_MCP_TOOL_ALLOWLIST` | Unset | Optional tool-name allowlist; an empty value registers no tools. |
 | `KC_MCP_ENABLE_WRITES` | `0` | Write tools stay disabled. Enabling requires an approval public key. |
 | `KC_MCP_APPROVAL_PUBLIC_KEY_FILE` | Unset | Ed25519 public key for operation-bound approval. The private signing key belongs outside MCP. |
@@ -66,7 +65,7 @@ gateway's authorization check runs in its own container, not in MCP.
 ## Tool and policy source
 
 [`mcp/tool_registry.py`](../mcp/tool_registry.py) defines six tool records with
-scope, tier, extension, Cedar policy ID, and public argument types and defaults. Registration respects the deployment
+scope, tier, Cedar policy ID, and public argument types and defaults. Registration respects the deployment
 allowlist and write setting. Interactive entitlement and scope restrict discovery
 and are checked again on each call. The normal
 headless Docker profile exposes only `get_extension_inventory`.

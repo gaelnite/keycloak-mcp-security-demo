@@ -79,7 +79,6 @@ class ServerGateTests(unittest.TestCase):
         self,
         *,
         scopes,
-        admin=False,
         roles=frozenset(),
         realm_roles=frozenset(),
         interactive=False,
@@ -90,7 +89,6 @@ class ServerGateTests(unittest.TestCase):
             client_id=client_id or "https://cimd.lab.local:8444/client-metadata.json",
             scopes=frozenset(scopes),
             realm="lab",
-            admin=admin,
             expires_at=9_999_999_999,
             issuer=self.config.auth.issuer,
             audience=self.config.auth.audience,
@@ -118,18 +116,15 @@ class ServerGateTests(unittest.TestCase):
         principal = server.principal_for(human)
         self.assertIsInstance(principal, UserPrincipal)
         self.assertEqual(principal.roles, frozenset({"mcp-users-read"}))
-        self.assertFalse(principal.admin)
 
         machine = self.claims(
             scopes=["keycloak.users.read"],
             roles=["mcp-users-read"],
             realm_roles=["mcp-users-read", "mcp-admin"],
-            admin=True,
         )
         principal = server.principal_for(machine)
         self.assertIsInstance(principal, ClientPrincipal)
         self.assertEqual(principal.roles, frozenset({"mcp-users-read", "mcp-admin"}))
-        self.assertTrue(principal.admin)
 
     def test_a_pre_cedar_denial_names_the_client_behind_the_principal(self) -> None:
         server._CLAIMS.set(self.claims(scopes=[], client_id="mcp-desktop"))

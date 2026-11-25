@@ -4,7 +4,7 @@ The PEP tests replace the PDP transport with a fake, so they need no Node. A sec
 class exercises the real Cedar bundle when Node + cedar-wasm are present; if they are
 missing those tests skip rather than fail.
 
-Run from lab/keycloak-mcp:
+Run from the repository root:
     python3 -m unittest discover -s tests -t .
     .venv/bin/python -m unittest discover -s tests -t .
 """
@@ -27,7 +27,7 @@ import gen_cedar  # noqa: E402
 import pep as pep_module  # noqa: E402
 import tool_registry  # noqa: E402
 from pep import CedarPep, ClientPrincipal, Decision, PdpError, PepError, UserPrincipal  # noqa: E402
-from tool_registry import ADMIN, READ, TOOLS, TOOLS_BY_NAME, USER_LOCALE, USERS_READ, WRITE, ToolSpec  # noqa: E402
+from tool_registry import READ, TOOLS, TOOLS_BY_NAME, USER_LOCALE, USERS_READ, WRITE, ToolSpec  # noqa: E402
 
 CEDAR = LAB / "cedar"
 POLICIES = CEDAR / "policies.cedar"
@@ -40,9 +40,9 @@ ALL_SCOPES = frozenset(scope for tool in TOOLS for scope in tool.scopes)
 READ_SCOPES = frozenset(tool.scopes[0] for tool in TOOLS if not tool.write)
 
 
-def client_principal(scopes: frozenset[str] = READ_SCOPES, *, realm: str = "lab", admin: bool = False) -> ClientPrincipal:
+def client_principal(scopes: frozenset[str] = READ_SCOPES, *, realm: str = "lab") -> ClientPrincipal:
     """A machine caller as its own token would describe it."""
-    return ClientPrincipal(ISSUER, "mcp-client", realm, scopes, frozenset(), admin)
+    return ClientPrincipal(ISSUER, "mcp-client", realm, scopes, frozenset())
 
 
 def user_principal(
@@ -51,10 +51,9 @@ def user_principal(
     scopes: frozenset[str] = READ_SCOPES,
     roles: frozenset[str] = frozenset(),
     realm: str = "lab",
-    admin: bool = False,
 ) -> UserPrincipal:
     """A human caller as its own token would describe it."""
-    return UserPrincipal(ISSUER, subject, "desktop-client", realm, scopes, roles, admin)
+    return UserPrincipal(ISSUER, subject, "desktop-client", realm, scopes, roles)
 
 
 def _tool(name: str) -> ToolSpec:
@@ -62,7 +61,7 @@ def _tool(name: str) -> ToolSpec:
 
 
 class RegistryTests(unittest.TestCase):
-    def test_every_tool_declares_scope_policy_tier_extension(self) -> None:
+    def test_every_tool_declares_scope_policy_tier(self) -> None:
         self.assertEqual(
             {tool.name for tool in TOOLS},
             {"get_extension_inventory", "list_users", "get_user", "list_clients", "get_client", "set_user_locale"},
@@ -75,8 +74,7 @@ class RegistryTests(unittest.TestCase):
             with self.subTest(tool=tool.name):
                 self.assertTrue(tool.scopes)
                 self.assertTrue(tool.policy_id.startswith("kc-"))
-                self.assertIn(tool.tier, (READ, WRITE, ADMIN))
-                self.assertIn(tool.extension, tool_registry.EXTENSIONS)
+                self.assertIn(tool.tier, (READ, WRITE))
                 self.assertEqual(tool.write, tool.tier == WRITE)
 
     def test_write_tools_are_explicitly_registered(self) -> None:
@@ -85,14 +83,8 @@ class RegistryTests(unittest.TestCase):
         for name in writes:
             self.assertEqual(_tool(name).tier, WRITE)
 
-    def test_extension_filter_keeps_core_tools(self) -> None:
-        visible = tool_registry.tools_for_extensions(frozenset({"orgs"}))
-        names = {tool.name for tool in visible}
-        self.assertEqual(names, set(TOOLS_BY_NAME))
-
-    def test_read_and_admin_partitions(self) -> None:
+    def test_read_and_write_partitions(self) -> None:
         self.assertTrue(all(tool.tier == READ for tool in tool_registry.READ_TOOLS))
-        self.assertTrue(all(tool.tier == ADMIN for tool in tool_registry.ADMIN_TOOLS))
         self.assertTrue(all(tool.tier == WRITE for tool in tool_registry.WRITE_TOOLS))
 
 
@@ -116,7 +108,6 @@ class CedarBundleTests(unittest.TestCase):
         for policy_id in (
             "kc-deny-unknown-tool",
             "kc-deny-cross-realm",
-            "kc-deny-extension-missing",
             "kc-deny-writes-disabled",
             "kc-deny-unapproved-write",
         ):
@@ -136,7 +127,6 @@ class CedarBundleTests(unittest.TestCase):
                 self.assertIn("context.writesEnabled", block)
                 self.assertIn("context.approvalVerified", block)
                 self.assertIn("context.approvalTool == resource.name", block)
-                self.assertIn("context.extensions.contains(resource.extension)", block)
 
     def test_policies_carry_no_secret_or_wildcard_permit(self) -> None:
         text = POLICIES.read_text()
@@ -166,7 +156,6 @@ class CedarBundleTests(unittest.TestCase):
             with self.subTest(tool=tool.name):
                 self.assertEqual(entity["attrs"]["requiredScope"], tool.scopes[0])
                 self.assertEqual(entity["attrs"]["tier"], tool.tier)
-                self.assertEqual(entity["attrs"]["extension"], tool.extension)
                 self.assertEqual(entity["attrs"]["write"], tool.write)
 
     def test_no_principal_is_seeded(self) -> None:
@@ -220,7 +209,6 @@ class PepDecisionTests(unittest.TestCase):
             _tool("get_extension_inventory"),
             principal=client_principal(),
             realm="lab",
-            extensions=["orgs"],
         )
         self.assertTrue(decision.allowed)
         self.assertEqual(decision.reasons, ("kc-test-policy",))
@@ -243,7 +231,6 @@ class PepDecisionTests(unittest.TestCase):
             _tool("list_users"),
             principal=principal,
             realm="lab",
-            extensions=["core"],
         )
         self.assertEqual(fake.requests[0]["client"]["attrs"]["roles"], [USERS_READ.role])
 
@@ -252,7 +239,6 @@ class PepDecisionTests(unittest.TestCase):
             _tool("get_extension_inventory"),
             principal=client_principal(),
             realm="lab",
-            extensions=[],
         )
         self.assertFalse(decision.allowed)
         self.assertFalse(decision.failed_closed)
@@ -264,7 +250,6 @@ class PepDecisionTests(unittest.TestCase):
             _tool("get_extension_inventory"),
             principal=client_principal(),
             realm="lab",
-            extensions=[],
         )
         self.assertFalse(decision.allowed)
         self.assertTrue(decision.failed_closed)
@@ -278,35 +263,31 @@ class PepDecisionTests(unittest.TestCase):
                 _tool("get_extension_inventory"),
                 principal=client_principal(),
                 realm="lab",
-                extensions=[],
             )
         self.assertFalse(decision.allowed)
         self.assertIn("audit_unavailable", decision.reasons)
 
-    def test_context_maps_approval_expiry_and_extensions(self) -> None:
+    def test_context_maps_approval_expiry(self) -> None:
         fake = FakePdp()
         pep = make_pep(fake)
         pep.authorize(
             _tool("set_user_locale"),
-            principal=client_principal(ALL_SCOPES, admin=True),
+            principal=client_principal(ALL_SCOPES),
             realm="lab",
-            extensions=["core"],
             writes_enabled=True,
             approval={"verified": True, "tool": "set_user_locale", "expiresIn": 0},
         )
         context = fake.requests[0]["context"]
         self.assertFalse(context["approvalVerified"])
         self.assertTrue(context["writesEnabled"])
-        self.assertIn("core", context["extensions"])
         self.assertEqual(context["approvalTool"], "set_user_locale")
 
     def test_context_rejects_bad_approval_shape_without_crashing(self) -> None:
         fake = FakePdp()
         decision = make_pep(fake).authorize(
             _tool("set_user_locale"),
-            principal=client_principal(ALL_SCOPES, admin=True),
+            principal=client_principal(ALL_SCOPES),
             realm="lab",
-            extensions=["core"],
             writes_enabled=True,
             approval={"verified": True, "tool": "other", "expiresIn": "soon"},
         )
@@ -320,7 +301,6 @@ class PepDecisionTests(unittest.TestCase):
                 _tool("get_extension_inventory"),
                 principal=client_principal(),
                 realm="lab",
-                extensions=[],
             )
             text = audit.read_text()
             mode = stat.S_IMODE(os.stat(audit).st_mode)
@@ -359,7 +339,6 @@ class RealCedarTests(unittest.TestCase):
         parameters = {
             "principal": client_principal(),
             "realm": "lab",
-            "extensions": ["core"],
         }
         parameters.update(kwargs)
         return self.pep.authorize(_tool(tool), **parameters)  # type: ignore[arg-type]
@@ -411,7 +390,7 @@ when { 9223372036854775807 + 1 == 0 };
 ''')
             with CedarPep(pdp_script=pdp) as checker:
                 decision = checker.authorize(
-                    _tool("list_users"), principal=client_principal(READ_SCOPES | {USERS_READ.scope}), realm="lab", extensions=[],
+                    _tool("list_users"), principal=client_principal(READ_SCOPES | {USERS_READ.scope}), realm="lab",
                 )
         self.assertFalse(decision.allowed)
         self.assertTrue(decision.failed_closed)
@@ -438,9 +417,8 @@ when { 9223372036854775807 + 1 == 0 };
         )
         decision = self.pep.authorize(
             unknown,
-            principal=client_principal(ALL_SCOPES, admin=True),
+            principal=client_principal(ALL_SCOPES),
             realm="lab",
-            extensions=[],
             tool_known=False,
         )
         self.assertFalse(decision.allowed)
@@ -539,7 +517,6 @@ class PdpRecoveryTests(unittest.TestCase):
             _tool("get_extension_inventory"),
             principal=client_principal(),
             realm="lab",
-            extensions=["core"],
         )
 
     def assert_denied(self, decision: Decision, needle: str) -> None:

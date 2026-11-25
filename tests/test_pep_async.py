@@ -120,13 +120,11 @@ class StubPepCase(unittest.IsolatedAsyncioTestCase):
             realm="lab",
             scopes=frozenset(TOOL.scopes),
             roles=frozenset(),
-            admin=False,
         )
         return pep.authorize(
             TOOL,
             principal=principal,
             realm="lab",
-            extensions=["core"],
         )
 
     async def ask_async(self, pep: CedarPep, principal_id: str = "mcp-claude"):
@@ -136,13 +134,11 @@ class StubPepCase(unittest.IsolatedAsyncioTestCase):
             realm="lab",
             scopes=frozenset(TOOL.scopes),
             roles=frozenset(),
-            admin=False,
         )
         return await pep.authorize_async(
             TOOL,
             principal=principal,
             realm="lab",
-            extensions=["core"],
         )
 
     def wait_for_stderr(self, pep: CedarPep, needle: str, timeout: float = 3.0) -> str:
