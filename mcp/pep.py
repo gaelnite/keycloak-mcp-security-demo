@@ -38,13 +38,13 @@ import threading
 import time
 import uuid
 from collections import deque
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from tool_registry import ADMIN, READ, WRITE, ToolSpec
+from tool_registry import READ, WRITE, ToolSpec
 
 HERE = Path(__file__).resolve().parent
 PDP_SCRIPT = HERE / "pdp.mjs"
@@ -63,7 +63,7 @@ MAX_RESTARTS_IN_WINDOW = 5
 STDERR_CHUNK_BYTES = 256
 STDERR_TAIL_BYTES = 4096
 STDERR_TAIL_LIMIT = 400
-ACTION = {READ: "Read", WRITE: "Write", ADMIN: "Admin"}
+ACTION = {READ: "Read", WRITE: "Write"}
 
 
 class PdpError(RuntimeError):
@@ -121,7 +121,6 @@ class UserPrincipal:
     realm: str
     scopes: frozenset[str]
     roles: frozenset[str]
-    admin: bool = False
 
     def __post_init__(self) -> None:
         # The realm belongs to the issuer, not to the request path: a token issued by
@@ -155,7 +154,6 @@ class UserPrincipal:
                 "clientId": self.client_id,
                 "scopes": sorted(self.scopes),
                 "roles": sorted(self.roles),
-                "admin": self.admin,
             },
         }
 
@@ -165,7 +163,7 @@ class ClientPrincipal:
     """A machine client, as its own access token describes it.
 
     This type exists because a client used to have no facts at all: its entity id came
-    from `KC_MCP_CLIENT_ENTITY_MAP` and its scopes and admin flag came from whichever
+    from `KC_MCP_CLIENT_ENTITY_MAP` and its scopes came from whichever
     fixture happened to be seeded in the bundle. A client's authority is now whatever the
     token says - the verifier's allowlist still decides whether that token is accepted at
     all, and the policy still decides what those scopes and realm roles permit.
@@ -176,7 +174,6 @@ class ClientPrincipal:
     realm: str
     scopes: frozenset[str]
     roles: frozenset[str]
-    admin: bool = False
 
     def __post_init__(self) -> None:
         origin = _realm_of(self.issuer)
@@ -205,7 +202,6 @@ class ClientPrincipal:
                 "clientId": self.client_id,
                 "scopes": sorted(self.scopes),
                 "roles": sorted(self.roles),
-                "admin": self.admin,
             },
         }
 
@@ -231,7 +227,6 @@ def _approval_facts(approval: Mapping[str, Any] | None) -> tuple[bool, str]:
 def build_context(
     *,
     realm: str,
-    extensions: Sequence[str],
     writes_enabled: bool,
     approval_verified: bool = False,
     approval_tool: str = "",
@@ -241,7 +236,6 @@ def build_context(
         "resource": {"__entity": {"type": "KeycloakMCP::Resource", "id": f"realm:{realm}"}},
         "toolKnown": bool(tool_known),
         "writesEnabled": bool(writes_enabled),
-        "extensions": sorted(set(extensions) | {"core"}),
         "approvalVerified": approval_verified,
         "approvalTool": approval_tool,
     }
@@ -382,7 +376,6 @@ class CedarPep:
         *,
         principal: Principal,
         realm: str,
-        extensions: Sequence[str],
         writes_enabled: bool = False,
         approval: Mapping[str, Any] | None = None,
         tool_known: bool = True,
@@ -398,7 +391,6 @@ class CedarPep:
         approval_verified, approval_tool = _approval_facts(approval)
         context = build_context(
             realm=realm,
-            extensions=extensions,
             writes_enabled=writes_enabled,
             approval_verified=approval_verified,
             approval_tool=approval_tool,
@@ -602,7 +594,7 @@ class CedarPep:
             "tool": tool.name,
             "policyId": tool.policy_id,
             "tier": tool.tier,
-            "extension": tool.extension,
+            "extension": "core",
             "principalType": principal.entity_type,
             # The entity id is a hash of issuer and identity, which keeps a subject
             # stable across realms but says nothing on its own: the client the token
@@ -652,7 +644,7 @@ class CedarPep:
             "tool": tool.name,
             "policyId": tool.policy_id,
             "tier": tool.tier,
-            "extension": tool.extension,
+            "extension": "core",
             "principalType": principal_type,
             "principal": principal_id,
             "realm": realm,

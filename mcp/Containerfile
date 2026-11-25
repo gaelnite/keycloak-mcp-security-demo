@@ -1,6 +1,6 @@
-# MCP reference server: Python server + Cedar PDP (Node), for rootless Podman.
-# Build context = repo root (from the repo root):
-#   podman build -t localhost/keycloak-mcp:0.1.0-lab03 -f mcp/Containerfile .
+# MCP reference server: Python server + Cedar PDP (Node), for Docker Compose.
+# Build from the repository root:
+#   docker build -t keycloak-mcp -f mcp/Containerfile .
 # The Cedar PDP (mcp/pdp.mjs) runs as a Node subprocess of the server; both
 # runtimes live in this one image. The default runtime uses the same digest as the Compose demo.
 ARG NODE_IMAGE=docker.io/library/node:24-bookworm-slim@sha256:dc26ae92c9fb15cf6b1d63e20f0944b2efe0f115b20e00be48fb23fceb061c54

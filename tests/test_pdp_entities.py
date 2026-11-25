@@ -34,25 +34,23 @@ USERS_READ = "keycloak.users.read"
 EXTENSIONS_READ = "keycloak.extensions.read"
 
 
-def user_attrs(scopes=(USERS_READ,), roles=("mcp-users-read",), admin=False, **overrides) -> dict:
+def user_attrs(scopes=(USERS_READ,), roles=("mcp-users-read",), **overrides) -> dict:
     attrs = {
         "subject": "runtime-user",
         "issuer": "https://keycloak.example/realms/lab",
         "clientId": "demo-desktop",
         "scopes": sorted(scopes),
         "roles": sorted(roles),
-        "admin": admin,
     }
     attrs.update(overrides)
     return attrs
 
 
-def client_attrs(scopes=(EXTENSIONS_READ,), roles=(), admin=False, **overrides) -> dict:
+def client_attrs(scopes=(EXTENSIONS_READ,), roles=(), **overrides) -> dict:
     attrs = {
         "clientId": "runtime-client",
         "scopes": sorted(scopes),
         "roles": sorted(roles),
-        "admin": admin,
     }
     attrs.update(overrides)
     return attrs
@@ -116,7 +114,7 @@ class PdpAssertions(unittest.TestCase):
         response = self.pdp.ask(
             action=READ,
             resource=tool,
-            context=build_context(realm=realm, extensions=["core"], writes_enabled=False),
+            context=build_context(realm=realm, writes_enabled=False),
             **request,
         )
         self.assertTrue(response.get("ok"), response)
@@ -153,24 +151,24 @@ class PdpEntityStoreTests(PdpAssertions):
             principal={"type": "KeycloakMCP::Client", "id": "mcp-claude"},
             action=READ,
             resource=INVENTORY,
-            context=build_context(realm="lab", extensions=["core"], writes_enabled=False),
+            context=build_context(realm="lab", writes_enabled=False),
         )
         self.assertTrue(response["ok"])
         self.assertEqual(response["decision"], "deny")
         self.assertIn("mcp-claude", json.dumps(response["errors"]))
 
-    def test_an_unknown_tool_denies_with_a_cedar_diagnostic_and_does_not_crash(self) -> None:
+    def test_an_unknown_tool_denies_and_does_not_crash(self) -> None:
         response = self.pdp.ask(
             requestId="ghost",
             principal={"type": "KeycloakMCP::Client", "id": "oidc:runtime-client"},
             client={"realm": "lab", "attrs": client_attrs()},
             action=READ,
             resource=GHOST,
-            context=build_context(realm="lab", extensions=["core"], writes_enabled=False),
+            context=build_context(realm="lab", writes_enabled=False),
         )
         self.assertTrue(response["ok"])
         self.assertEqual(response["decision"], "deny")
-        self.assertIn("ghost_tool", json.dumps(response["errors"]))
+        self.assertEqual(response["errors"], [])
 
     # --- principals live only in the request --------------------------------------
     def test_a_user_that_is_not_in_the_bundle_is_synthesised_with_its_realm(self) -> None:
@@ -218,8 +216,8 @@ class PdpEntityStoreTests(PdpAssertions):
         cases = (
             ("no-scope", user_attrs(scopes=[]), "deny"),
             ("no-role", user_attrs(roles=[]), "deny"),
-            ("admin-only", user_attrs(roles=[], admin=True), "deny"),
-            ("plain-user", user_attrs(roles=["user"], scopes=[USERS_READ], admin=False), "deny"),
+            ("unrelated-role", user_attrs(roles=["mcp-admin"]), "deny"),
+            ("plain-user", user_attrs(roles=["user"], scopes=[USERS_READ]), "deny"),
             ("authorised", user_attrs(), "allow"),
         )
         for subject, attrs, expected in cases:
@@ -261,7 +259,7 @@ class PdpEntityStoreTests(PdpAssertions):
             user={"realm": "lab"},
             action=READ,
             resource=LIST_USERS,
-            context=build_context(realm="lab", extensions=["core"], writes_enabled=False),
+            context=build_context(realm="lab", writes_enabled=False),
         )
         self.assertFalse(response["ok"])
         self.assertIn("invalid dynamic principal", response["detail"])
@@ -273,7 +271,7 @@ class PdpEntityStoreTests(PdpAssertions):
             user={"attrs": user_attrs()},
             action=READ,
             resource=LIST_USERS,
-            context=build_context(realm="lab", extensions=["core"], writes_enabled=False),
+            context=build_context(realm="lab", writes_enabled=False),
         )
         self.assertFalse(response["ok"])
         self.assertIn("without a realm", response["detail"])
@@ -285,7 +283,7 @@ class PdpEntityStoreTests(PdpAssertions):
             user={"realm": "lab", "attrs": user_attrs()},
             action=READ,
             resource=LIST_USERS,
-            context=build_context(realm="lab", extensions=["core"], writes_enabled=False),
+            context=build_context(realm="lab", writes_enabled=False),
         )
         self.assertFalse(response["ok"])
         self.assertIn("invalid dynamic principal", response["detail"])
@@ -324,7 +322,6 @@ class PdpStaticShadowTests(PdpAssertions):
                     "name": "list_users",
                     "requiredScope": USERS_READ,
                     "tier": "read",
-                    "extension": "core",
                     "write": False,
                 },
                 "parents": [],
@@ -359,7 +356,7 @@ class PdpStaticShadowTests(PdpAssertions):
             user={"realm": "lab", "attrs": user_attrs(subject="alice")},
             action=READ,
             resource=LIST_USERS,
-            context=build_context(realm="lab", extensions=["core"], writes_enabled=False),
+            context=build_context(realm="lab", writes_enabled=False),
         )
         self.assertFalse(response["ok"])
         self.assertIn("shadows a static entity", response["detail"])

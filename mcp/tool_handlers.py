@@ -7,7 +7,6 @@ from typing import Any
 from urllib.parse import quote
 
 from keycloak_admin import KeycloakAdmin
-from server_config import ServerConfig
 from tool_registry import TOOLS
 
 MAX_TOOL_ROWS = 50
@@ -93,12 +92,11 @@ async def get_user(admin: KeycloakAdmin, realm: str, user_id: str, **_: Any) -> 
     )
 
 
-async def get_extension_inventory(config: ServerConfig, **_: Any) -> Any:
+async def get_extension_inventory(**_: Any) -> Any:
     return {
-        "installed": sorted(config.extensions),
+        "installed": ["core"],
         "tools": {
-            extension: [tool.name for tool in TOOLS if tool.extension == extension]
-            for extension in sorted(config.extensions | {"core"})
+            "core": [tool.name for tool in TOOLS]
         },
     }
 

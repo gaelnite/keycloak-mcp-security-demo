@@ -97,7 +97,6 @@ class TokenVerifierTests(unittest.TestCase):
         self.assertEqual(claims.subject, "user-1")
         self.assertEqual(claims.client_id, CLIENT_URL)
         self.assertEqual(claims.realm, "lab")
-        self.assertTrue(claims.admin)
         self.assertEqual(claims.realm_roles, frozenset({"mcp-admin"}))
         self.assertIn("keycloak.realms.read", claims.scopes)
         self.assertTrue(claims.allows("keycloak.users.read"))
@@ -125,7 +124,6 @@ class TokenVerifierTests(unittest.TestCase):
         }
         claims = asyncio.run(verifier.verify(self.token(**payload)))
         self.assertTrue(claims.interactive)
-        self.assertFalse(claims.admin)
         self.assertEqual(claims.roles, {USERS_READ.role})
         for changes in (
             {"typ": "ID"},

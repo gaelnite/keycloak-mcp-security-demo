@@ -20,7 +20,7 @@ requires a separate, single-use approval.
 
 [![Delegated user lookup in seven steps. Keycloak issues the user-read grant, MCP checks it with Cedar, SPIRE identifies MCP, and Keycloak exchanges the token. The private gateway forwards the read to the Admin REST API, and MCP returns the permitted user fields.](docs/assets/delegated-user-lookup.svg)](docs/MCP-DELEGATION.md)
 
-[Interactive guide](https://github.com/gaelnite/keycloak-mcp-security-demo/blob/main/docs/mcp-auth-evolution.html) · Open the HTML locally to trace an allowed read, an approved write, and a missing-scope denial.
+[Interactive guide](https://gaelnite.github.io/keycloak-mcp-security-demo/mcp-auth-evolution.html) · Trace an allowed read, an approved write, and a missing-scope denial.
 
 ## Architecture
 
