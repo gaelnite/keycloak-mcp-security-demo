@@ -22,8 +22,11 @@ ignore = ["E501", "S105"]
 "tests/*" = ["E402", "S101"]
 
 [tool.ruff.lint.isort]
-# The runtime modules are flat modules under mcp/, not a package.
+# The runtime modules are flat modules under mcp/, not a package; the demo tooling
+# under deploy/docker is flat for the same reason.
 known-first-party = [
+  "admin_gateway",
+  "bootstrap",
   "approval",
   "auth",
   "delegation",

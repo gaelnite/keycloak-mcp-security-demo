@@ -29,5 +29,7 @@ ENV PATH="/opt/venv/bin:${PATH}" \
     PYTHONUNBUFFERED=1
 EXPOSE 8800
 # The server listens on loopback. Docker Compose puts MCP and the TLS edge
-# in the same network namespace and defines the service health check.
+# in the same network namespace and defines the service health check. The
+# delegated profile runs this same image a second time as the gateway's
+# independent Admin request checker: entrypoint python mcp/admin_gateway.py.
 CMD ["python", "mcp/server.py", "--transport", "http", "--host", "127.0.0.1", "--port", "8800"]

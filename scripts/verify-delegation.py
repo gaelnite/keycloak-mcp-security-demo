@@ -17,6 +17,7 @@ import httpx
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT / "mcp"), str(ROOT / "deploy/docker")]
 
+from delegation import ADMIN_CHECK_PATH, ADMIN_CHECK_PORT
 from desktop_oauth import DESKTOP_CLIENT_ID
 from tool_registry import CLIENTS_READ, LOCALE_FIXTURE_ID, USER_LOCALE, USERS_READ
 
@@ -43,6 +44,35 @@ def exercise(invoke):
 
     def op(*args, input=None):
         return invoke("run", "-T", "--rm", "--no-deps", *args, input=input)
+
+
+    def checker_status(port):
+        # Ask the loopback listeners from inside the edge network namespace, as nginx does.
+        return invoke(
+            "exec", "-T", "mcp", "curl", "-s", "-o", "/dev/null", "-w", "%{http_code}",
+            f"http://127.0.0.1:{port}{ADMIN_CHECK_PATH}",
+        ).strip()
+
+    def checker_lives_outside_mcp():
+        # MCP answers its own port with an authentication challenge: it no longer serves
+        # the Admin check at all. The sidecar answers with a denial, because a request
+        # without the gateway's method/path snapshot is not an Admin request anyone can
+        # reason about, and an unadorned request must never look like a permit.
+        assert checker_status(8800) == "401", "MCP is still answering the Admin request check"
+        assert checker_status(ADMIN_CHECK_PORT) == "403", "the Admin request checker did not deny a bare request"
+        print("The private gateway's check is served outside the MCP process it constrains.")
+
+    def gateway_denies_without_the_checker(session):
+        # Fail closed: with no checker listening, the gateway forwards nothing, even for a
+        # bearer that was permitted a moment ago.
+        invoke("stop", "admin-gateway")
+        try:
+            denied = tool_content(session.call("list_users"))
+            assert isinstance(denied, dict) and "error" in denied, "the private gateway forwarded without a checker"
+        finally:
+            invoke("up", "-d", "--wait", "--wait-timeout", "120", "admin-gateway")
+        assert session.call("list_users").status_code == 200
+        print("The gateway denied Admin traffic while the checker container was stopped, and recovered with it.")
 
     def matching_admin_updates():
         raw = invoke(
@@ -90,6 +120,8 @@ WHERE c.client_id = :'requester' AND u.username = 'demo-realm-admin'
         assert all(item.keys() <= {"id", "username", "enabled", "locale"} for item in users_content)
         assert all(item.keys() <= {"id", "clientId", "protocol", "enabled"} for item in clients_content)
         assert tool_content(client_session.call("get_client", client_id=DESKTOP_CLIENT_ID))["clientId"] == DESKTOP_CLIENT_ID
+        checker_lives_outside_mcp()
+        gateway_denies_without_the_checker(user_session)
         assert "not entitled" in tool_content(user_session.call("list_clients"))["error"]
         scope_required(client_session.call("list_users"), USERS_READ)
         assert "outside this grant" in tool_content(client_session.call("list_clients", realm="master"))["error"]

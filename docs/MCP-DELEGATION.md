@@ -68,10 +68,16 @@ validates the subject, audience, requester, scopes and role ceiling before dispa
 The desktop bearer is sent to Keycloak only as the exchange subject token. Admin
 REST receives the exchanged token through a private HTTPS gateway. The public
 edge returns 404 on Admin routes. The gateway checks the original HTTP method,
-normalized route and restricted query before forwarding. MCP builds the locale
-update from the approved locale and fixed fixture ID. Keycloak's Admin API role
-checks still apply. Docker administrators and the operator-run attestation probe
-are within this demo's trust boundary.
+normalized route and restricted query before forwarding. That check is served by
+a sidecar container, [`mcp/admin_gateway.py`](../mcp/admin_gateway.py), on
+loopback port 8802 and not by MCP: a boundary a process draws around itself can
+be redrawn from inside it. The sidecar shares the edge's network namespace, reads
+only the edge CA, receives no Workload API socket or executable, and denies any
+request it cannot parse, so an unreachable checker forwards nothing. It binds
+`ADMIN_CHECK_PORT` (8802), the constant bootstrap injects into the listener. MCP builds
+the locale update from the approved locale and fixed fixture ID. Keycloak's Admin
+API role checks still apply. Docker administrators and the operator-run
+attestation probe are within this demo's trust boundary.
 
 ## Verification and protocol scope
 
@@ -79,8 +85,10 @@ are within this demo's trust boundary.
 Keycloak **26.8.2** delegated profile with SPIRE **1.16.0**: PKCE logins,
 scope-filtered reads, projected responses, wrong SVID audience/subject,
 unselected and empty grants, cross-scope and cross-realm denials, public Admin
-denials, approved locale change/restore, redacted admin events and replay after
-MCP restart. This is profile-specific evidence, not a general Keycloak guarantee.
+denials, the Admin route check served by the sidecar rather than MCP, denial
+while that sidecar is stopped, approved locale change/restore, redacted admin
+events and replay after MCP restart. This is profile-specific evidence, not a
+general Keycloak guarantee.
 
 The automated client negotiates MCP protocol `2025-11-25`. The linked current
 MCP specification is `2026-07-28`; that revision is not represented as tested by

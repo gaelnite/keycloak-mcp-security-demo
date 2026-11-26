@@ -29,6 +29,14 @@ MAX_ADMIN_TTL = 60
 MAX_ROWS = 50
 MAX_RESPONSE_BYTES = 1024 * 1024
 
+# The private Admin gateway asks this path one question per request.  It is served by
+# mcp/admin_gateway.py in its own container, never by the MCP process it constrains.
+ADMIN_CHECK_PATH = "/__delegated_admin_check"
+ADMIN_CHECK_PORT = 8802
+# A process holding any of these can obtain a JWT-SVID and therefore request an
+# exchange.  The checker must not, so `for_gateway` refuses them outright.
+WORKLOAD_ENV = ("KC_MCP_SPIFFE_TRUST_DOMAIN", "KC_MCP_SPIFFE_WORKLOAD_SOCKET", "KC_MCP_SPIFFE_EXECUTABLE")
+
 
 class DelegationError(RuntimeError):
     pass
@@ -56,25 +64,9 @@ class DelegationConfig:
 
     @classmethod
     def from_env(cls, auth: KeycloakAuthConfig, env: Mapping[str, str]) -> DelegationConfig | None:
-        private_origin = env.get("KC_MCP_DELEGATED_ADMIN_URL", "").strip()
-        if not private_origin:
+        private_origin = _private_origin(auth, env)
+        if private_origin is None:
             return None
-        if not auth.interactive_client_ids or not auth.protected_resource:
-            raise DelegationError("Delegation requires configured interactive clients and a canonical MCP resource")
-        try:
-            endpoint = urlsplit(private_origin)
-            port = endpoint.port
-        except ValueError as exc:
-            raise DelegationError("The private Admin port is invalid") from exc
-        if (
-            not re.fullmatch(r"https://localhost:[1-9][0-9]*", private_origin)
-            or port is None
-            or endpoint.netloc == urlsplit(auth.issuer).netloc
-        ):
-            raise DelegationError("KC_MCP_DELEGATED_ADMIN_URL must use a distinct HTTPS localhost port")
-        admin_audience_for(auth.issuer, auth.realm)
-        if auth.jwks_url != auth.issuer + "/protocol/openid-connect/certs":
-            raise DelegationError("Delegation requires the exact realm JWKS endpoint")
         domain = env.get("KC_MCP_SPIFFE_TRUST_DOMAIN", "").strip()
         if not re.fullmatch(r"[a-z0-9][a-z0-9.-]*", domain):
             raise DelegationError("KC_MCP_SPIFFE_TRUST_DOMAIN is required for delegation")
@@ -87,6 +79,29 @@ class DelegationConfig:
             raise DelegationError("The delegation CA or Workload API executable is unavailable")
         return cls(auth, private_origin, ca_file, domain, socket, executable)
 
+    @classmethod
+    def for_gateway(cls, auth: KeycloakAuthConfig, env: Mapping[str, str]) -> DelegationConfig:
+        """Settings for the process that checks Admin requests on the gateway's behalf.
+
+        It verifies a token Keycloak has already signed, so it needs the issuer, the
+        audience the token must carry and the CA that signs the listener it reaches
+        Keycloak through.  It deliberately cannot exchange: without a trust domain, a
+        Workload API socket and an executable there is nothing here that could obtain an
+        SVID, so a compromised checker cannot mint a token the gateway would accept.
+        """
+        private_origin = _private_origin(auth, env)
+        if private_origin is None:
+            raise DelegationError("The Admin request checker requires KC_MCP_DELEGATED_ADMIN_URL")
+        given = sorted(key for key in WORKLOAD_ENV if env.get(key, "").strip())
+        if given:
+            raise DelegationError(
+                "The Admin request checker must not be given Workload API credentials: " + ", ".join(given)
+            )
+        ca_file = env.get("KC_MCP_DELEGATED_CA_FILE", "").strip()
+        if not Path(ca_file).is_absolute() or not Path(ca_file).is_file():
+            raise DelegationError("The Admin request checker needs a readable pinned CA file")
+        return cls(auth, private_origin, ca_file, "", "", "")
+
     @property
     def admin_audience(self) -> str:
         return admin_audience_for(self.auth.issuer, self.auth.realm)
@@ -98,6 +113,34 @@ class DelegationConfig:
     @property
     def token_endpoint(self) -> str:
         return self.auth.issuer + "/protocol/openid-connect/token"
+
+    @property
+    def can_exchange(self) -> bool:
+        return bool(self.trust_domain and self.socket and self.executable)
+
+
+def _private_origin(auth: KeycloakAuthConfig, env: Mapping[str, str]) -> str | None:
+    """Validate the private Admin listener both the MCP client and the checker must agree on."""
+    private_origin = env.get("KC_MCP_DELEGATED_ADMIN_URL", "").strip()
+    if not private_origin:
+        return None
+    if not auth.interactive_client_ids or not auth.protected_resource:
+        raise DelegationError("Delegation requires configured interactive clients and a canonical MCP resource")
+    try:
+        endpoint = urlsplit(private_origin)
+        port = endpoint.port
+    except ValueError as exc:
+        raise DelegationError("The private Admin port is invalid") from exc
+    if (
+        not re.fullmatch(r"https://localhost:[1-9][0-9]*", private_origin)
+        or port is None
+        or endpoint.netloc == urlsplit(auth.issuer).netloc
+    ):
+        raise DelegationError("KC_MCP_DELEGATED_ADMIN_URL must use a distinct HTTPS localhost port")
+    admin_audience_for(auth.issuer, auth.realm)
+    if auth.jwks_url != auth.issuer + "/protocol/openid-connect/certs":
+        raise DelegationError("Delegation requires the exact realm JWKS endpoint")
+    return private_origin
 
 
 def fetch_svid(executable: str, socket: str, spiffe_id: str, audience: str) -> str:
@@ -284,6 +327,8 @@ class DelegatedAdmin:
 
     async def exchange(self, capability: Capability, caller: TokenClaims, inbound: str) -> str:
         config = self.config
+        if not config.can_exchange:
+            raise DelegationError("This process holds no Workload API credentials and cannot request an exchange")
         if (
             not caller.interactive or caller.issuer != config.auth.issuer or caller.realm != config.auth.realm
             or caller.audience != config.auth.audience or caller.expires_at <= time.time()

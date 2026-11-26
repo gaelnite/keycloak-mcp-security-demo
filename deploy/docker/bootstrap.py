@@ -14,7 +14,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
 from desktop_oauth import DESKTOP_CLIENT_ID, DESKTOP_REDIRECT
-from delegation import ADMIN_SCOPE, admin_audience_for, spiffe_subject
+from delegation import ADMIN_CHECK_PORT, ADMIN_SCOPE, admin_audience_for, spiffe_subject
 from tool_registry import CAPABILITIES, LOCALE_FIXTURE_ID, LOCALES, USERS_READ
 
 ROOT = Path("/install")
@@ -48,7 +48,8 @@ def origin():
     port = os.environ.get("DEMO_PORT", "49443")
     if not port.isascii() or not port.isdecimal() or not 1024 <= int(port) <= 65535 or str(int(port)) != port:
         raise ValueError("KC_MCP_DEMO_PORT must be a port from 1024 to 65535 without leading zeros")
-    if port == "8800" or (port == "8801" and os.environ.get("DEMO_PROFILE") == "delegated"):
+    private = {"8801", str(ADMIN_CHECK_PORT)} if os.environ.get("DEMO_PROFILE") == "delegated" else set()
+    if port == "8800" or port in private:
         raise ValueError("The HTTPS port overlaps an internal listener")
     return f"https://localhost:{port}"
 
@@ -303,6 +304,14 @@ def write_file(path, body, mode, uid=0, gid=0):
         os.close(directory)
 
 
+def admin_listener():
+    """The private Admin listener, wired to the port the checker sidecar binds."""
+    template = (SOURCE / "private-admin.conf").read_text()
+    if "@ADMIN_CHECK_PORT@" not in template:
+        raise ValueError("private-admin.conf must inject the Admin request checker port")
+    return template.replace("@ADMIN_CHECK_PORT@", str(ADMIN_CHECK_PORT))
+
+
 def generated_files(base, *, interactive=False, delegated=False):
     edge_ca = certificate("Keycloak MCP demo HTTPS CA")
     edge_key, edge_cert = certificate("localhost", signer=edge_ca, tls=True)
@@ -317,7 +326,7 @@ def generated_files(base, *, interactive=False, delegated=False):
     desktop_passwords = None
     if interactive:
         desktop_passwords = {name: secrets.token_urlsafe(32) for name in ("demo-helpdesk", "demo-realm-admin")}
-    private_listener = (SOURCE / "private-admin.conf").read_text() if delegated else ""
+    private_listener = admin_listener() if delegated else ""
     edge_config = (SOURCE / "edge.conf").read_text().replace("@PRIVATE_ADMIN@", private_listener)
     files = {
         "edge": {

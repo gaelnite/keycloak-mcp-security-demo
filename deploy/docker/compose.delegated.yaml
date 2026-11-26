@@ -7,6 +7,49 @@ services:
       - approval-state:/install/approval-state
       - delegate:/install/delegate
 
+  # The private Admin gateway's authorization check.  It answers one question per
+  # request — may this bearer perform exactly this method, path and query? — and it
+  # answers it outside the MCP process it constrains.  It shares the edge's network
+  # namespace so nginx reaches it on loopback and nothing else can, and it receives no
+  # Workload API socket, no SPIRE executable and no delegate volume: it can verify a
+  # token Keycloak signed, and cannot ask for one.
+  admin-gateway:
+    image: ${COMPOSE_PROJECT_NAME}-mcp
+    pull_policy: never
+    user: "10005:10005"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    network_mode: service:edge
+    restart: unless-stopped
+    depends_on:
+      edge:
+        condition: service_started
+        restart: true
+    entrypoint: [python, /app/mcp/admin_gateway.py]
+    logging:
+      driver: none
+    environment:
+      KC_ISSUER: https://localhost:${KC_MCP_DEMO_PORT:-49443}/realms/lab
+      KC_MCP_RESOURCE_URL: https://localhost:${KC_MCP_DEMO_PORT:-49443}/mcp
+      KC_ALLOWED_CLIENT_IDS: mcp-workload https://chatgpt.com/oauth/codex/client.json
+      KC_MCP_INTERACTIVE_CLIENT_IDS: https://chatgpt.com/oauth/codex/client.json
+      KC_MCP_DELEGATED_ADMIN_URL: https://localhost:8801
+      KC_MCP_DELEGATED_CA_FILE: /trust/edge-ca.pem
+      PYTHONDONTWRITEBYTECODE: "1"
+    volumes:
+      - edge-trust:/trust:ro
+    tmpfs: [/tmp]
+    healthcheck:
+      # A live checker that denies an unadorned request: the probe asks the same
+      # question the gateway would, and 403 is the only acceptable answer.
+      # The port matches ADMIN_CHECK_PORT in mcp/delegation.py, which bootstrap also
+      # injects into the nginx listener; tests/test_admin_gateway.py pins them together.
+      test: [CMD-SHELL, 'test "$$(curl -s -o /dev/null -w "%{http_code}" --max-time 2 http://127.0.0.1:8802/__delegated_admin_check)" = 403']
+      interval: 3s
+      timeout: 3s
+      retries: 30
+
   register:
     environment:
       DEMO_PROFILE: delegated
@@ -18,6 +61,8 @@ services:
     pid: service:spire-agent
     depends_on:
       spire-agent:
+        condition: service_healthy
+      admin-gateway:
         condition: service_healthy
     environment:
       KC_MCP_DELEGATED_ADMIN_URL: https://localhost:8801

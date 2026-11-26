@@ -64,7 +64,8 @@ the trust store, which is how the demo verifies its own edge certificate.
 The [delegated profile](MCP-DELEGATION.md) additionally requires an explicit
 private Admin URL, pinned CA, SPIRE Workload API socket and executable. Its
 locale write requires a durable replay database and short, resource-bound
-approval. Never expose the private Admin gateway through the public edge.
+approval. Never expose the private Admin gateway through the public edge. The
+gateway's authorization check runs in its own container, not in MCP.
 
 ## Tool and policy source
 
@@ -77,6 +78,7 @@ headless Docker profile exposes only `get_extension_inventory`.
 | Source | Responsibility |
 |---|---|
 | [`mcp/server.py`](../mcp/server.py) | CLI, stdio/HTTP, token middleware, registration and dispatch gates. |
+| [`mcp/admin_gateway.py`](../mcp/admin_gateway.py) | Checks each private Admin request for the gateway, outside the process it constrains. |
 | [`mcp/server_config.py`](../mcp/server_config.py) | Configuration parsing and validation. |
 | [`mcp/keycloak_admin.py`](../mcp/keycloak_admin.py), [`mcp/tool_handlers.py`](../mcp/tool_handlers.py) | Direct read client, path checks, and tool implementations. |
 | [`mcp/gen_tool_wrappers.py`](../mcp/gen_tool_wrappers.py) | Generates typed wrappers that forward all calls to the common authorization gate. |
