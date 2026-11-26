@@ -7,7 +7,7 @@ from typing import Any
 
 import httpx
 
-from auth import TokenError
+from auth import TokenError, ssl_trust
 
 HTTP_TIMEOUT = 15.0
 
@@ -31,6 +31,14 @@ class KeycloakAdmin:
                 base_url=self._base_url,
                 timeout=HTTP_TIMEOUT,
                 follow_redirects=False,
+                # Every request here carries a bearer token - the caller's own, or a
+                # helpdesk operator's after a delegated exchange. Like the JWKS fetch,
+                # this client must not inherit an ambient proxy (which would read and
+                # could redirect that token) or ~/.netrc credentials, and it must still
+                # trust an explicitly installed CA, which is how the demo reaches
+                # Keycloak through its own edge.
+                trust_env=False,
+                verify=ssl_trust(),
                 transport=self._transport,
             )
         return self._client
